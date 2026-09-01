@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -56,10 +57,21 @@ func run(
 		fmt.Fprintf(stderr, format+"\n", values...)
 	}
 	service := newService(logf)
-	defer service.Close()
+	asyncClose := false
+	defer func() {
+		if asyncClose {
+			// ponytail: Scan and Rank callbacks do not accept context, so async
+			// cleanup keeps this short-lived CLI bounded on timeout; use
+			// context-aware callbacks if a long-lived caller needs forced cancellation.
+			go service.Close()
+			return
+		}
+		service.Close()
+	}()
 
 	results, err := waitForResults(service.Results(), timeout)
 	if err != nil {
+		asyncClose = errors.Is(err, context.DeadlineExceeded)
 		fmt.Fprintf(stderr, "sysc-launch: initial results: %v\n", err)
 		return 1
 	}
@@ -68,6 +80,7 @@ func run(
 		service.Query(args[1])
 		results, err = waitForResults(service.Results(), timeout)
 		if err != nil {
+			asyncClose = errors.Is(err, context.DeadlineExceeded)
 			fmt.Fprintf(stderr, "sysc-launch: query results: %v\n", err)
 			return 1
 		}

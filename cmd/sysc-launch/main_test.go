@@ -7,6 +7,8 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,9 +16,12 @@ import (
 )
 
 type fakeService struct {
-	results chan []launcher.Result
-	queries []string
-	closed  bool
+	results      chan []launcher.Result
+	queries      []string
+	closed       atomic.Bool
+	closeStarted chan struct{}
+	closeRelease <-chan struct{}
+	closeDone    chan struct{}
 }
 
 func newFakeService(snapshots ...[]launcher.Result) *fakeService {
@@ -29,7 +34,18 @@ func newFakeService(snapshots ...[]launcher.Result) *fakeService {
 
 func (s *fakeService) Query(query string)                { s.queries = append(s.queries, query) }
 func (s *fakeService) Results() <-chan []launcher.Result { return s.results }
-func (s *fakeService) Close()                            { s.closed = true }
+func (s *fakeService) Close() {
+	if s.closeStarted != nil {
+		close(s.closeStarted)
+	}
+	if s.closeRelease != nil {
+		<-s.closeRelease
+	}
+	s.closed.Store(true)
+	if s.closeDone != nil {
+		close(s.closeDone)
+	}
+}
 
 func TestRunQueryWritesOneJSONSnapshot(t *testing.T) {
 	entry := launcher.Entry{
@@ -88,7 +104,7 @@ func TestRunQueryPassesOptionalQueryUnchanged(t *testing.T) {
 	if got := decodeResults(t, stdout.Bytes()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("results = %+v, want %+v", got, want)
 	}
-	if !service.closed {
+	if !service.closed.Load() {
 		t.Fatal("service was not closed")
 	}
 }
@@ -158,16 +174,34 @@ func TestRunBoundsResultWaits(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			service := newFakeService(test.snapshots...)
+			service.closeStarted = make(chan struct{})
+			release := make(chan struct{})
+			service.closeRelease = release
+			service.closeDone = make(chan struct{})
+			var releaseOnce sync.Once
+			releaseClose := func() { releaseOnce.Do(func() { close(release) }) }
+			defer releaseClose()
+
 			var stdout, stderr bytes.Buffer
 			started := time.Now()
+			returned := make(chan int, 1)
+			go func() {
+				returned <- run(
+					test.args,
+					&stdout,
+					&stderr,
+					func(func(string, ...any)) queryService { return service },
+					time.Millisecond,
+				)
+			}()
 
-			status := run(
-				test.args,
-				&stdout,
-				&stderr,
-				func(func(string, ...any)) queryService { return service },
-				time.Millisecond,
-			)
+			var status int
+			select {
+			case status = <-returned:
+			case <-time.After(time.Second):
+				releaseClose()
+				t.Fatal("run did not return while Close was blocked")
+			}
 
 			if status == 0 {
 				t.Fatal("run returned success")
@@ -181,8 +215,25 @@ func TestRunBoundsResultWaits(t *testing.T) {
 			if !strings.Contains(stderr.String(), test.wantError) {
 				t.Fatalf("stderr = %q, want text %q", stderr.String(), test.wantError)
 			}
-			if !service.closed {
-				t.Fatal("service was not closed")
+			select {
+			case <-service.closeStarted:
+			case <-time.After(time.Second):
+				t.Fatal("Close was not initiated")
+			}
+			select {
+			case <-service.closeDone:
+				t.Fatal("Close returned before it was unblocked")
+			default:
+			}
+
+			releaseClose()
+			select {
+			case <-service.closeDone:
+			case <-time.After(time.Second):
+				t.Fatal("Close did not finish after it was unblocked")
+			}
+			if !service.closed.Load() {
+				t.Fatal("service did not finish closing")
 			}
 		})
 	}
