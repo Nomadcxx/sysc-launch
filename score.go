@@ -13,7 +13,10 @@ const resultLimit = 50
 
 var initFZF sync.Once
 
-func rank(entries []Entry, query string) []Result {
+// rank scores entries against query; boost, when non-nil, supplies the raw
+// usage score, added capped at +25 so usage never buries a clearly better
+// textual match.
+func rank(entries []Entry, query string, boost func(query, identifier string) int) []Result {
 	query = strings.TrimSpace(query)
 	slab := util.MakeSlab(100*1024, 2048)
 	results := make([]Result, 0, min(len(entries), resultLimit))
@@ -21,6 +24,9 @@ func rank(entries []Entry, query string) []Result {
 		score, matched := entryScore(entry, query, slab)
 		if !matched {
 			continue
+		}
+		if boost != nil {
+			score += min(boost(query, entry.ID), usageBoostCap)
 		}
 		results = append(results, Result{Entry: entry, Score: score})
 	}
