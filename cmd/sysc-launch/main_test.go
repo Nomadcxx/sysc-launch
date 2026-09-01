@@ -249,7 +249,75 @@ func TestRunLaunchActivatesTarget(t *testing.T) {
 	}
 }
 
-func TestRunLaunchWaitsForInitialSnapshot(t *testing.T) {
+func TestRunLaunchDoesNotActivateBeforeInitialSnapshot(t *testing.T) {
+	service := newFakeService()
+	service.closeStarted = make(chan struct{})
+	service.closeDone = make(chan struct{})
+	releaseClose := make(chan struct{})
+	service.closeRelease = releaseClose
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseClose) }) }
+
+	var stdout, stderr bytes.Buffer
+	returned := make(chan int, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		returned <- run(
+			[]string{"launch", "editor.desktop"},
+			&stdout,
+			&stderr,
+			func(func(string, ...any)) queryService { return service },
+			time.Millisecond,
+		)
+	}()
+	defer func() {
+		release()
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Error("run goroutine did not finish during cleanup")
+		}
+	}()
+
+	var status int
+	select {
+	case status = <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("run did not return after initial results timeout")
+	}
+	if status != 1 {
+		t.Fatalf("run status = %d, want 1", status)
+	}
+	if got := stderr.String(); !strings.Contains(got, "sysc-launch: initial results: context deadline exceeded") {
+		t.Fatalf("stderr = %q", got)
+	}
+	if calls := service.activationCalls(); len(calls) != 0 {
+		t.Fatalf("Activate called before initial results: %+v", calls)
+	}
+	select {
+	case <-service.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Close was not initiated")
+	}
+	select {
+	case <-service.closeDone:
+		t.Fatal("Close returned before it was unblocked")
+	default:
+	}
+
+	release()
+	select {
+	case <-service.closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not finish after it was unblocked")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRunLaunchUsesEntryFromInitialSnapshot(t *testing.T) {
 	scanStarted := make(chan struct{})
 	releaseScan := make(chan struct{})
 	runnerCalled := make(chan []string, 1)
@@ -299,13 +367,6 @@ func TestRunLaunchWaitsForInitialSnapshot(t *testing.T) {
 	case <-scanStarted:
 	case <-time.After(time.Second):
 		t.Fatal("Scan did not start")
-	}
-	select {
-	case argv := <-runnerCalled:
-		t.Fatalf("runner called before initial snapshot: %v", argv)
-	case status := <-returned:
-		t.Fatalf("run returned before initial snapshot with status %d", status)
-	case <-time.After(20 * time.Millisecond):
 	}
 
 	release()
