@@ -37,12 +37,14 @@ type History struct {
 
 // DefaultHistory loads usage history from
 // $XDG_STATE_HOME/sysc-launch/history.gob, falling back to
-// $HOME/.local/state/sysc-launch/history.gob.
+// $HOME/.local/state/sysc-launch/history.gob. The logf argument receives
+// history load and save diagnostics; nil suppresses those diagnostics.
 func DefaultHistory(logf func(string, ...any)) *History {
 	return loadHistory(defaultHistoryPath(os.Getenv), time.Now, logf)
 }
 
-// OpenHistory loads the on-disk usage history at path.
+// OpenHistory loads the on-disk usage history at path. The logf argument
+// receives history load and save diagnostics; nil suppresses those diagnostics.
 func OpenHistory(path string, logf func(string, ...any)) *History {
 	return loadHistory(path, time.Now, logf)
 }

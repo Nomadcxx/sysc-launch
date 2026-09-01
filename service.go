@@ -21,7 +21,7 @@ const (
 // LookPath, and Now use the XDG desktop scanner, built-in ranker, Niri spawn,
 // os.Getenv, exec.LookPath, and time.Now. Non-positive StaleAfter and
 // ActivateTimeout use one minute and five seconds. Nil History disables usage
-// persistence and boosting; nil Logf suppresses scan and history diagnostics.
+// persistence and boosting; nil Logf suppresses scanner diagnostics.
 type ServiceConfig struct {
 	Scan            func() []Entry
 	History         *History
