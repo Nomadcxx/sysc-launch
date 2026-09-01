@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -105,4 +106,67 @@ func scanDesktopDir(dir string, logf logFunc) (map[string]*desktopentry.Entry, e
 		return nil
 	})
 	return out, err
+}
+
+func expandDesktopEntries(entries []*desktopentry.Entry, getenv getenvFunc, lookPath lookPathFunc, logf logFunc) []Entry {
+	out := make([]Entry, 0, len(entries))
+	for _, raw := range entries {
+		entry, err := expandDesktopEntry(raw, getenv, lookPath)
+		if err != nil {
+			if logf != nil {
+				id := ""
+				if raw != nil {
+					id = raw.ID
+				}
+				logf("launcher: exclude %s: %v", id, err)
+			}
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func expandDesktopEntry(raw *desktopentry.Entry, getenv getenvFunc, lookPath lookPathFunc) (Entry, error) {
+	if raw == nil {
+		return Entry{}, fmt.Errorf("launcher: nil desktop entry")
+	}
+	argv, err := raw.ExpandExec(nil, "")
+	if err != nil {
+		return Entry{}, err
+	}
+	terminal := ""
+	if raw.Terminal {
+		terminal, err = resolveTerminal(getenv, lookPath)
+		if err != nil {
+			return Entry{}, err
+		}
+		argv = terminalArgv(terminal, argv)
+	}
+
+	entry := Entry{
+		ID:          raw.ID,
+		Name:        raw.Name,
+		GenericName: raw.GenericName,
+		Keywords:    append([]string(nil), raw.Keywords...),
+		Argv:        argv,
+		Comment:     raw.Comment,
+		IconName:    raw.Icon,
+		Terminal:    raw.Terminal,
+	}
+	for _, action := range raw.Actions {
+		copy := *raw
+		copy.Exec = action.Exec
+		actionArgv, actionErr := copy.ExpandExec(nil, "")
+		if actionErr != nil {
+			continue
+		}
+		if terminal != "" {
+			actionArgv = terminalArgv(terminal, actionArgv)
+		}
+		entry.Actions = append(entry.Actions, Action{
+			ID: action.ID, Name: action.Name, IconName: action.Icon, Argv: actionArgv,
+		})
+	}
+	return entry, nil
 }
