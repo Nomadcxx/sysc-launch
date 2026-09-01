@@ -101,7 +101,7 @@ func TestActivateRecordsUsageOnSuccessOnly(t *testing.T) {
 	if err := svc.Activate("firefox.desktop", ""); err == nil {
 		t.Fatal("failed spawn returned nil error")
 	}
-	if got := h.Boost("fire", "firefox.desktop"); got != 0 {
+	if got := h.boost("fire", "firefox.desktop"); got != 0 {
 		t.Fatalf("failed activation recorded usage: boost = %d", got)
 	}
 
@@ -109,7 +109,7 @@ func TestActivateRecordsUsageOnSuccessOnly(t *testing.T) {
 	if err := svc.Activate("firefox.desktop", ""); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
-	if got := h.Boost("fire", "firefox.desktop"); got != 10 {
+	if got := h.boost("fire", "firefox.desktop"); got != 10 {
 		t.Fatalf("successful activation boost = %d, want 10", got)
 	}
 }

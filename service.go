@@ -17,9 +17,11 @@ const (
 	defaultActivateTimeout = 5 * time.Second
 )
 
-// ServiceConfig wires the launcher service. Nil fields take the production
-// defaults: an XDG desktop scan, the rank in score.go, time.Now, and a
-// 60-second rescan staleness window (D12).
+// ServiceConfig wires the launcher service. Nil Scan, Rank, Run, Getenv,
+// LookPath, and Now use the XDG desktop scanner, built-in ranker, Niri spawn,
+// os.Getenv, exec.LookPath, and time.Now. Non-positive StaleAfter and
+// ActivateTimeout use one minute and five seconds. Nil History disables usage
+// persistence and boosting; nil Logf suppresses scan and history diagnostics.
 type ServiceConfig struct {
 	Scan            func() []Entry
 	History         *History
@@ -204,7 +206,7 @@ func (s *Service) work() {
 
 	var boost func(string, string) int
 	if s.cfg.History != nil {
-		boost = s.cfg.History.Boost
+		boost = s.cfg.History.boost
 	}
 	registry := []Provider{applicationsProvider(func(query string) []Result {
 		return s.cfg.Rank(entries, query, boost)
@@ -280,7 +282,7 @@ func (s *Service) activate(entries []Entry, query, id, action string) error {
 		return err
 	}
 	if s.cfg.History != nil {
-		s.cfg.History.Record(query, id)
+		s.cfg.History.record(query, id)
 	}
 	return nil
 }

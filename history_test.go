@@ -51,9 +51,9 @@ func TestHistoryRoundTrip(t *testing.T) {
 	clock := &testClock{t: time.Now()}
 
 	h := loadHistory(path, clock.now, nil)
-	h.Record("fire", "firefox.desktop")
-	h.Record("fire", "firefox.desktop")
-	h.Record("term", "kitty.desktop")
+	h.record("fire", "firefox.desktop")
+	h.record("fire", "firefox.desktop")
+	h.record("term", "kitty.desktop")
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -64,10 +64,10 @@ func TestHistoryRoundTrip(t *testing.T) {
 	}
 
 	reloaded := loadHistory(path, clock.now, nil)
-	if got := reloaded.Boost("fire", "firefox.desktop"); got != 20 {
+	if got := reloaded.boost("fire", "firefox.desktop"); got != 20 {
 		t.Fatalf("reloaded boost = %d, want 20", got)
 	}
-	if got := reloaded.Boost("term", "kitty.desktop"); got != 10 {
+	if got := reloaded.boost("term", "kitty.desktop"); got != 10 {
 		t.Fatalf("reloaded boost = %d, want 10", got)
 	}
 }
@@ -79,10 +79,10 @@ func TestHistoryCapsAmountAtTen(t *testing.T) {
 	clock := &testClock{t: time.Now()}
 	h := loadHistory(path, clock.now, nil)
 	for i := 0; i < 12; i++ {
-		h.Record("q", "app.desktop")
+		h.record("q", "app.desktop")
 	}
 
-	if got := loadHistory(path, clock.now, nil).Boost("q", "app.desktop"); got != 100 {
+	if got := loadHistory(path, clock.now, nil).boost("q", "app.desktop"); got != 100 {
 		t.Fatalf("boost after 12 records = %d, want 100 (amount capped at 10)", got)
 	}
 }
@@ -113,12 +113,12 @@ func TestHistoryUsageScoreFormula(t *testing.T) {
 			clock := &testClock{t: now.Add(-time.Duration(tt.daysAgo) * 24 * time.Hour)}
 			h := loadHistory(filepath.Join(t.TempDir(), "history.gob"), clock.now, nil)
 			for i := 0; i < tt.amount; i++ {
-				h.Record(tt.recorded, "app.desktop")
+				h.record(tt.recorded, "app.desktop")
 			}
 			clock.t = now
 
-			if got := h.Boost(tt.query, "app.desktop"); got != tt.wantBoost {
-				t.Fatalf("Boost(%q) = %d, want %d", tt.query, got, tt.wantBoost)
+			if got := h.boost(tt.query, "app.desktop"); got != tt.wantBoost {
+				t.Fatalf("boost(%q) = %d, want %d", tt.query, got, tt.wantBoost)
 			}
 		})
 	}
@@ -129,13 +129,13 @@ func TestHistoryEmptyQueryAggregatesAcrossQueries(t *testing.T) {
 
 	clock := &testClock{t: time.Now()}
 	h := loadHistory(filepath.Join(t.TempDir(), "history.gob"), clock.now, nil)
-	h.Record("fi", "firefox.desktop")
-	h.Record("fi", "firefox.desktop")
-	h.Record("firefox", "firefox.desktop")
-	h.Record("firefox", "firefox.desktop")
-	h.Record("firefox", "firefox.desktop")
+	h.record("fi", "firefox.desktop")
+	h.record("fi", "firefox.desktop")
+	h.record("firefox", "firefox.desktop")
+	h.record("firefox", "firefox.desktop")
+	h.record("firefox", "firefox.desktop")
 
-	if got := h.Boost("", "firefox.desktop"); got != 50 {
+	if got := h.boost("", "firefox.desktop"); got != 50 {
 		t.Fatalf("empty-query boost = %d, want 50", got)
 	}
 }
@@ -150,12 +150,12 @@ func TestHistoryCorruptFileStartsEmpty(t *testing.T) {
 
 	clock := &testClock{t: time.Now()}
 	h := loadHistory(path, clock.now, nil)
-	if got := h.Boost("fire", "firefox.desktop"); got != 0 {
+	if got := h.boost("fire", "firefox.desktop"); got != 0 {
 		t.Fatalf("boost from corrupt history = %d, want 0", got)
 	}
 
-	h.Record("fire", "firefox.desktop")
-	if got := loadHistory(path, clock.now, nil).Boost("fire", "firefox.desktop"); got != 10 {
+	h.record("fire", "firefox.desktop")
+	if got := loadHistory(path, clock.now, nil).boost("fire", "firefox.desktop"); got != 10 {
 		t.Fatalf("boost after re-record = %d, want 10", got)
 	}
 }
@@ -166,12 +166,12 @@ func TestRankAddsUsageBoostCappedAtTwentyFive(t *testing.T) {
 	clock := &testClock{t: time.Now()}
 	h := loadHistory(filepath.Join(t.TempDir(), "history.gob"), clock.now, nil)
 	for i := 0; i < 10; i++ {
-		h.Record("needle", "used.desktop")
+		h.record("needle", "used.desktop")
 	}
 
 	entry := Entry{ID: "used.desktop", Name: "Needle"}
 	base := rank([]Entry{entry}, "needle", nil)
-	boosted := rank([]Entry{entry}, "needle", h.Boost)
+	boosted := rank([]Entry{entry}, "needle", h.boost)
 	if got := boosted[0].Score - base[0].Score; got != 25 {
 		t.Fatalf("boost applied = %d, want 25 (raw usage 100 capped)", got)
 	}
@@ -182,12 +182,12 @@ func TestRankEmptyQueryOrdersByUsageThenName(t *testing.T) {
 
 	clock := &testClock{t: time.Now()}
 	h := loadHistory(filepath.Join(t.TempDir(), "history.gob"), clock.now, nil)
-	h.Record("zulu", "zulu.desktop")
+	h.record("zulu", "zulu.desktop")
 
 	got := rank([]Entry{
 		{ID: "alpha.desktop", Name: "Alpha"},
 		{ID: "zulu.desktop", Name: "Zulu"},
-	}, "", h.Boost)
+	}, "", h.boost)
 	if len(got) != 2 || got[0].Entry.Name != "Zulu" || got[1].Entry.Name != "Alpha" {
 		t.Fatalf("empty-query order = %+v, want Zulu then Alpha", got)
 	}

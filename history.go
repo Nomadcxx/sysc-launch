@@ -35,8 +35,9 @@ type History struct {
 	data map[string]map[string]historyData
 }
 
-// DefaultHistory loads the on-disk usage history at the freedesktop state
-// path. This is the production wiring; tests inject loadHistory on a tempdir.
+// DefaultHistory loads usage history from
+// $XDG_STATE_HOME/sysc-launch/history.gob, falling back to
+// $HOME/.local/state/sysc-launch/history.gob.
 func DefaultHistory(logf func(string, ...any)) *History {
 	return loadHistory(defaultHistoryPath(os.Getenv), time.Now, logf)
 }
@@ -83,9 +84,9 @@ func loadHistory(path string, now func() time.Time, logf func(string, ...any)) *
 	return h
 }
 
-// Record persists one successful activation of identifier under query.
+// record persists one successful activation of identifier under query.
 // Callers invoke it only after the spawn succeeds (D6).
-func (h *History) Record(query, identifier string) {
+func (h *History) record(query, identifier string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -102,9 +103,9 @@ func (h *History) Record(query, identifier string) {
 	h.saveLocked()
 }
 
-// Boost returns the raw usage score for identifier under query. Callers cap
+// boost returns the raw usage score for identifier under query. Callers cap
 // it (usageBoostCap) when adding it to the D4 textual score.
-func (h *History) Boost(query, identifier string) int {
+func (h *History) boost(query, identifier string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 

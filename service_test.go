@@ -178,7 +178,7 @@ func TestServiceAppliesUsageBoost(t *testing.T) {
 		t.Fatalf("initial results = %+v", got)
 	}
 
-	h.Record("zulu", "zulu.desktop")
+	h.record("zulu", "zulu.desktop")
 	svc.Query("")
 	if got := recvResults(t, svc); len(got) != 2 || got[0].Entry.Name != "Zulu" {
 		t.Fatalf("boosted results = %+v", got)

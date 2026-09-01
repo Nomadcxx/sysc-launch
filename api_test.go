@@ -31,8 +31,13 @@ func TestPublishedServiceAndHistoryAPI(t *testing.T) {
 	})
 	defer service.Close()
 
-	if got := <-service.Results(); len(got) != 1 || got[0].Entry.ID != "app.desktop" {
-		t.Fatalf("initial results = %+v", got)
+	select {
+	case got := <-service.Results():
+		if len(got) != 1 || got[0].Entry.ID != "app.desktop" {
+			t.Fatalf("initial results = %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial results")
 	}
 	if err := service.Activate("app.desktop", ""); err != nil {
 		t.Fatalf("Activate: %v", err)
