@@ -34,7 +34,7 @@ func (r *recordRunner) lastArgv() []string {
 	return r.argvs[len(r.argvs)-1]
 }
 
-func activateService(t *testing.T, runner *recordRunner, h *history) *Service {
+func activateService(t *testing.T, runner *recordRunner, h *History) *Service {
 	t.Helper()
 	svc := NewService(ServiceConfig{
 		Scan: func() []Entry {

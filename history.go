@@ -26,7 +26,8 @@ type historyData struct {
 	Amount   int
 }
 
-type history struct {
+// History stores launcher usage for ranking and persists successful activations.
+type History struct {
 	mu   sync.Mutex
 	path string
 	now  func() time.Time
@@ -36,8 +37,13 @@ type history struct {
 
 // DefaultHistory loads the on-disk usage history at the freedesktop state
 // path. This is the production wiring; tests inject loadHistory on a tempdir.
-func DefaultHistory(logf logFunc) *history {
+func DefaultHistory(logf func(string, ...any)) *History {
 	return loadHistory(defaultHistoryPath(os.Getenv), time.Now, logf)
+}
+
+// OpenHistory loads the on-disk usage history at path.
+func OpenHistory(path string, logf func(string, ...any)) *History {
+	return loadHistory(path, time.Now, logf)
 }
 
 func defaultHistoryPath(getenv getenvFunc) string {
@@ -48,14 +54,14 @@ func defaultHistoryPath(getenv getenvFunc) string {
 	if base == "" {
 		base = filepath.Join(getenv("HOME"), ".local", "state")
 	}
-	return filepath.Join(base, "sysc-shell", "launcher", "history.gob")
+	return filepath.Join(base, "sysc-launch", "history.gob")
 }
 
-func loadHistory(path string, now func() time.Time, logf logFunc) *history {
+func loadHistory(path string, now func() time.Time, logf func(string, ...any)) *History {
 	if now == nil {
 		now = time.Now
 	}
-	h := &history{
+	h := &History{
 		path: path,
 		now:  now,
 		logf: logf,
@@ -79,7 +85,7 @@ func loadHistory(path string, now func() time.Time, logf logFunc) *history {
 
 // Record persists one successful activation of identifier under query.
 // Callers invoke it only after the spawn succeeds (D6).
-func (h *history) Record(query, identifier string) {
+func (h *History) Record(query, identifier string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -98,7 +104,7 @@ func (h *history) Record(query, identifier string) {
 
 // Boost returns the raw usage score for identifier under query. Callers cap
 // it (usageBoostCap) when adding it to the D4 textual score.
-func (h *history) Boost(query, identifier string) int {
+func (h *History) Boost(query, identifier string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -113,7 +119,7 @@ func (h *history) Boost(query, identifier string) int {
 // usageLocked aggregates Amount and the most recent LastUsed across every
 // stored query prefix-related to query (all of them when query is empty),
 // returning the smallest contributing prefix-length delta.
-func (h *history) usageLocked(query, identifier string) (amount int, lastUsed time.Time, delta int) {
+func (h *History) usageLocked(query, identifier string) (amount int, lastUsed time.Time, delta int) {
 	for stored, queries := range h.data {
 		if query != "" && !strings.HasPrefix(query, stored) && !strings.HasPrefix(stored, query) {
 			continue
@@ -139,7 +145,7 @@ func (h *history) usageLocked(query, identifier string) (amount int, lastUsed ti
 	return amount, lastUsed, delta
 }
 
-func (h *history) saveLocked() {
+func (h *History) saveLocked() {
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(h.data); err != nil {
 		if h.logf != nil {

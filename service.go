@@ -17,23 +17,18 @@ const (
 	defaultActivateTimeout = 5 * time.Second
 )
 
-type rankFunc func(entries []Entry, query string, boost func(query, identifier string) int) []Result
-
-// runFunc executes an already-built argv with a bounded context.
-type runFunc func(ctx context.Context, argv []string) error
-
 // ServiceConfig wires the launcher service. Nil fields take the production
 // defaults: an XDG desktop scan, the rank in score.go, time.Now, and a
 // 60-second rescan staleness window (D12).
 type ServiceConfig struct {
 	Scan            func() []Entry
-	History         *history
-	Rank            rankFunc
-	Run             runFunc
-	Getenv          getenvFunc
-	LookPath        lookPathFunc
+	History         *History
+	Rank            func(entries []Entry, query string, boost func(query, identifier string) int) []Result
+	Run             func(ctx context.Context, argv []string) error
+	Getenv          func(string) string
+	LookPath        func(string) (string, error)
 	Now             func() time.Time
-	Logf            logFunc
+	Logf            func(string, ...any)
 	StaleAfter      time.Duration
 	ActivateTimeout time.Duration
 }

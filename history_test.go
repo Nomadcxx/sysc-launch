@@ -14,24 +14,33 @@ func (c *testClock) now() time.Time { return c.t }
 func TestDefaultHistoryPath(t *testing.T) {
 	t.Parallel()
 
-	getenv := func(key string) string {
-		if key == "XDG_STATE_HOME" {
-			return "/state"
-		}
-		return ""
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "XDG_STATE_HOME",
+			env:  map[string]string{"XDG_STATE_HOME": "/state"},
+			want: "/state/sysc-launch/history.gob",
+		},
+		{
+			name: "HOME fallback",
+			env:  map[string]string{"HOME": "/home/user"},
+			want: "/home/user/.local/state/sysc-launch/history.gob",
+		},
 	}
-	if got := defaultHistoryPath(getenv); got != "/state/sysc-shell/launcher/history.gob" {
-		t.Fatalf("defaultHistoryPath = %q", got)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	home := func(key string) string {
-		if key == "HOME" {
-			return "/home/user"
-		}
-		return ""
-	}
-	if got := defaultHistoryPath(home); got != "/home/user/.local/state/sysc-shell/launcher/history.gob" {
-		t.Fatalf("defaultHistoryPath fallback = %q", got)
+			getenv := func(key string) string {
+				return tt.env[key]
+			}
+			if got := defaultHistoryPath(getenv); got != tt.want {
+				t.Fatalf("defaultHistoryPath = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
