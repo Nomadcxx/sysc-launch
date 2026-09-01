@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -245,6 +246,93 @@ func TestRunLaunchActivatesTarget(t *testing.T) {
 				t.Fatal("service was not closed")
 			}
 		})
+	}
+}
+
+func TestRunLaunchWaitsForInitialSnapshot(t *testing.T) {
+	scanStarted := make(chan struct{})
+	releaseScan := make(chan struct{})
+	runnerCalled := make(chan []string, 1)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseScan) }) }
+
+	var stdout, stderr bytes.Buffer
+	returned := make(chan int, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		returned <- run(
+			[]string{"launch", "editor.desktop"},
+			&stdout,
+			&stderr,
+			func(logf func(string, ...any)) queryService {
+				return launcher.NewService(launcher.ServiceConfig{
+					Scan: func() []launcher.Entry {
+						close(scanStarted)
+						<-releaseScan
+						return []launcher.Entry{{
+							ID:   "editor.desktop",
+							Name: "Editor",
+							Argv: []string{"editor", "--new"},
+						}}
+					},
+					Run: func(_ context.Context, argv []string) error {
+						runnerCalled <- append([]string(nil), argv...)
+						return nil
+					},
+					Logf: logf,
+				})
+			},
+			time.Second,
+		)
+	}()
+	defer func() {
+		release()
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Error("run goroutine did not finish during cleanup")
+		}
+	}()
+
+	select {
+	case <-scanStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Scan did not start")
+	}
+	select {
+	case argv := <-runnerCalled:
+		t.Fatalf("runner called before initial snapshot: %v", argv)
+	case status := <-returned:
+		t.Fatalf("run returned before initial snapshot with status %d", status)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	release()
+	var argv []string
+	select {
+	case argv = <-runnerCalled:
+	case <-time.After(time.Second):
+		t.Fatal("runner was not called after initial snapshot")
+	}
+	wantArgv := []string{"niri", "msg", "action", "spawn", "--", "editor", "--new"}
+	if !reflect.DeepEqual(argv, wantArgv) {
+		t.Fatalf("spawn argv = %v, want %v", argv, wantArgv)
+	}
+
+	select {
+	case status := <-returned:
+		if status != 0 {
+			t.Fatalf("run status = %d, stderr = %q", status, stderr.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("run did not return after activation")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 
