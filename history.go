@@ -34,6 +34,12 @@ type history struct {
 	data map[string]map[string]historyData
 }
 
+// DefaultHistory loads the on-disk usage history at the freedesktop state
+// path. This is the production wiring; tests inject loadHistory on a tempdir.
+func DefaultHistory(logf logFunc) *history {
+	return loadHistory(defaultHistoryPath(os.Getenv), time.Now, logf)
+}
+
 func defaultHistoryPath(getenv getenvFunc) string {
 	if getenv == nil {
 		getenv = os.Getenv
