@@ -1,16 +1,12 @@
 package launcher
 
-import (
-	"testing"
-
-	"github.com/Nomadcxx/sysc-shell/internal/ui"
-)
+import "testing"
 
 func stubProvider(name, prefix string) Provider {
 	return Provider{
 		Name:        name,
 		Prefix:      prefix,
-		Glyph:       PlaceholderGlyph,
+		Glyph:       name + "-glyph",
 		Description: name + " provider",
 		Query: func(query string) []Result {
 			return []Result{{Entry: Entry{ID: prefix, Name: name + ":" + query}}}
@@ -52,13 +48,8 @@ func TestRouteBareSlashReturnsOverview(t *testing.T) {
 	}
 	row := got.overview[0]
 	if row.Entry.Name != "Applications" || row.Entry.ID != "/apps" ||
-		row.Entry.Comment != "Applications provider" {
+		row.Entry.Comment != "Applications provider" || row.Entry.IconName != "Applications-glyph" {
 		t.Fatalf("overview row = %+v", row)
-	}
-	icon := row.Icon.Paint()
-	if len(icon.Children) != 1 || icon.Children[0].Kind != ui.KindText ||
-		icon.Children[0].Text != PlaceholderGlyph {
-		t.Fatalf("overview icon = %+v", icon)
 	}
 }
 

@@ -11,6 +11,18 @@ import (
 	"github.com/go-freedesktop/desktopentry"
 )
 
+func TestApplicationEntryRetainsIconName(t *testing.T) {
+	t.Parallel()
+
+	entry, err := expandDesktopEntry(&desktopentry.Entry{Exec: "app", Icon: "org.example.App"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.IconName != "org.example.App" {
+		t.Fatalf("IconName = %q, want %q", entry.IconName, "org.example.App")
+	}
+}
+
 func TestExclusions(t *testing.T) {
 	t.Parallel()
 

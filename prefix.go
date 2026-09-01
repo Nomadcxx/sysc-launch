@@ -2,8 +2,6 @@ package launcher
 
 import (
 	"strings"
-
-	"github.com/Nomadcxx/sysc-shell/internal/ui"
 )
 
 // Provider is one launcher source behind a "/" prefix. The registry is an
@@ -64,12 +62,8 @@ func overviewRows(registry []Provider, filter string) []Result {
 			!strings.Contains(strings.ToLower(p.Prefix), filter) {
 			continue
 		}
-		glyph := p.Glyph
 		out = append(out, Result{
-			Entry: Entry{ID: p.Prefix, Name: p.Name, Comment: p.Description},
-			Icon: Icon(func() *ui.Node {
-				return &ui.Node{Kind: ui.KindColumn, Width: IconSlotSize, Children: []*ui.Node{{Kind: ui.KindText, Text: glyph}}}
-			}),
+			Entry: Entry{ID: p.Prefix, Name: p.Name, Comment: p.Description, IconName: p.Glyph},
 		})
 	}
 	return out
