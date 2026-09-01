@@ -46,6 +46,8 @@ func TestExclusions(t *testing.T) {
 }
 
 func TestExclusionsPreservePrecedenceTombstonesAndActions(t *testing.T) {
+	t.Parallel()
+
 	high, low := t.TempDir(), t.TempDir()
 	writeDesktop(t, low, "org.example.Editor.desktop", `[Desktop Entry]
 Type=Application
@@ -87,6 +89,8 @@ Hidden=true
 }
 
 func TestExclusionsLogUnreadableDirectoryAndContinue(t *testing.T) {
+	t.Parallel()
+
 	valid := t.TempDir()
 	writeDesktop(t, valid, "org.example.App.desktop", `[Desktop Entry]
 Type=Application

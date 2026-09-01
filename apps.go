@@ -8,12 +8,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/go-freedesktop/desktopentry"
 )
 
 type lookPathFunc func(string) (string, error)
 type logFunc func(string, ...any)
+
+var desktopParseMu sync.Mutex
 
 func filterEntries(entries []*desktopentry.Entry, currentDesktop string, lookPath lookPathFunc) []*desktopentry.Entry {
 	if lookPath == nil {
@@ -88,7 +91,11 @@ func scanDesktopDir(dir string, logf logFunc) (map[string]*desktopentry.Entry, e
 		if item.IsDir() || !strings.HasSuffix(item.Name(), ".desktop") {
 			return nil
 		}
+		// ponytail: desktopentry@v0.1.0 races during process-global locale
+		// initialization; remove this lock when its parser becomes concurrent-safe.
+		desktopParseMu.Lock()
 		entry, err := desktopentry.ParseFile(path)
+		desktopParseMu.Unlock()
 		if err != nil {
 			if logf != nil {
 				logf("launcher: parse %s: %v", path, err)
