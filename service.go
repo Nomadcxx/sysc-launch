@@ -1,33 +1,53 @@
 package launcher
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-const defaultStaleAfter = time.Minute
+const (
+	defaultStaleAfter      = time.Minute
+	defaultActivateTimeout = 5 * time.Second
+)
 
 type rankFunc func(entries []Entry, query string, boost func(query, identifier string) int) []Result
+
+// runFunc executes an already-built argv with a bounded context.
+type runFunc func(ctx context.Context, argv []string) error
 
 // ServiceConfig wires the launcher service. Nil fields take the production
 // defaults: an XDG desktop scan, the rank in score.go, time.Now, and a
 // 60-second rescan staleness window (D12).
 type ServiceConfig struct {
-	Scan       func() []Entry
-	History    *history
-	Rank       rankFunc
-	Getenv     getenvFunc
-	LookPath   lookPathFunc
-	Now        func() time.Time
-	Logf       logFunc
-	StaleAfter time.Duration
+	Scan            func() []Entry
+	History         *history
+	Rank            rankFunc
+	Run             runFunc
+	Getenv          getenvFunc
+	LookPath        lookPathFunc
+	Now             func() time.Time
+	Logf            logFunc
+	StaleAfter      time.Duration
+	ActivateTimeout time.Duration
 }
+
+var ErrServiceClosed = errors.New("launcher: service closed")
 
 type queryRequest struct {
 	text string
 	gen  uint64
+}
+
+type activateRequest struct {
+	id, action string
+	reply      chan error
 }
 
 // Service owns the collector and query goroutines (D12). All state crosses
@@ -36,13 +56,14 @@ type queryRequest struct {
 type Service struct {
 	cfg ServiceConfig
 
-	gen     atomic.Uint64
-	queryCh chan queryRequest
-	openCh  chan struct{}
-	snapCh  chan []Entry
-	results chan []Result
-	done    chan struct{}
-	wg      sync.WaitGroup
+	gen        atomic.Uint64
+	queryCh    chan queryRequest
+	activateCh chan activateRequest
+	openCh     chan struct{}
+	snapCh     chan []Entry
+	results    chan []Result
+	done       chan struct{}
+	wg         sync.WaitGroup
 }
 
 func NewService(cfg ServiceConfig) *Service {
@@ -62,14 +83,18 @@ func NewService(cfg ServiceConfig) *Service {
 	if cfg.StaleAfter <= 0 {
 		cfg.StaleAfter = defaultStaleAfter
 	}
+	if cfg.ActivateTimeout <= 0 {
+		cfg.ActivateTimeout = defaultActivateTimeout
+	}
 
 	s := &Service{
-		cfg:     cfg,
-		queryCh: make(chan queryRequest, 1),
-		openCh:  make(chan struct{}, 1),
-		snapCh:  make(chan []Entry),
-		results: make(chan []Result, 1),
-		done:    make(chan struct{}),
+		cfg:        cfg,
+		queryCh:    make(chan queryRequest, 1),
+		activateCh: make(chan activateRequest),
+		openCh:     make(chan struct{}, 1),
+		snapCh:     make(chan []Entry),
+		results:    make(chan []Result, 1),
+		done:       make(chan struct{}),
 	}
 	s.wg.Add(2)
 	go s.collect()
@@ -109,6 +134,24 @@ func (s *Service) Query(text string) {
 // Results publishes ranked results as immutable slices, latest wins.
 func (s *Service) Results() <-chan []Result {
 	return s.results
+}
+
+// Activate spawns the entry (or one of its desktop actions) through
+// `niri msg action spawn` on the service goroutine and records usage only
+// when the spawn succeeds (D6/D9).
+func (s *Service) Activate(id, action string) error {
+	req := activateRequest{id: id, action: action, reply: make(chan error, 1)}
+	select {
+	case s.activateCh <- req:
+	case <-s.done:
+		return ErrServiceClosed
+	}
+	select {
+	case err := <-req.reply:
+		return err
+	case <-s.done:
+		return ErrServiceClosed
+	}
 }
 
 func (s *Service) Close() {
@@ -197,8 +240,71 @@ func (s *Service) work() {
 			if s.gen.Load() == req.gen {
 				s.publishResults(out)
 			}
+		case req := <-s.activateCh:
+			recordQuery := lastQuery
+			if r := route(registry, lastQuery); r.provider != nil {
+				recordQuery = r.query
+			}
+			req.reply <- s.activate(entries, recordQuery, req.id, req.action)
 		}
 	}
+}
+
+func (s *Service) activate(entries []Entry, query, id, action string) error {
+	var argv []string
+	found := false
+	for _, entry := range entries {
+		if entry.ID != id {
+			continue
+		}
+		argv = entry.Argv
+		found = true
+		if action != "" {
+			argv, found = nil, false
+			for _, a := range entry.Actions {
+				if a.ID == action {
+					argv, found = a.Argv, true
+					break
+				}
+			}
+		}
+		break
+	}
+	if !found {
+		return fmt.Errorf("launcher: no entry %q action %q", id, action)
+	}
+
+	run := s.cfg.Run
+	if run == nil {
+		run = s.niriRun
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ActivateTimeout)
+	defer cancel()
+	spawn := append([]string{"niri", "msg", "action", "spawn", "--"}, argv...)
+	if err := run(ctx, spawn); err != nil {
+		return err
+	}
+	if s.cfg.History != nil {
+		s.cfg.History.Record(query, id)
+	}
+	return nil
+}
+
+// niriRun is the production spawn path: argv only, no shell (D9). A missing
+// niri is an activation error, never a panic.
+func (s *Service) niriRun(ctx context.Context, argv []string) error {
+	lookPath := s.cfg.LookPath
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	if _, err := lookPath("niri"); err != nil {
+		return fmt.Errorf("launcher: niri not in PATH: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("launcher: %s: %w: %s", argv[0], err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (s *Service) publishResults(out []Result) {
