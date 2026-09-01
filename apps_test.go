@@ -106,6 +106,29 @@ Exec=app
 	}
 }
 
+func TestXDGAppDirs(t *testing.T) {
+	t.Parallel()
+
+	env := func(values map[string]string) getenvFunc {
+		return func(key string) string { return values[key] }
+	}
+
+	got := xdgAppDirs(env(map[string]string{
+		"XDG_DATA_HOME": "/home/u/.local/share",
+		"XDG_DATA_DIRS": "/usr/share:/usr/local/share",
+	}))
+	want := []string{"/home/u/.local/share/applications", "/usr/share/applications", "/usr/local/share/applications"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("xdgAppDirs = %v, want %v", got, want)
+	}
+
+	got = xdgAppDirs(env(map[string]string{"HOME": "/home/u"}))
+	want = []string{"/home/u/.local/share/applications", "/usr/local/share/applications", "/usr/share/applications"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("xdgAppDirs defaults = %v, want %v", got, want)
+	}
+}
+
 func writeDesktop(t *testing.T, dir, name, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {

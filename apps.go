@@ -18,6 +18,42 @@ type logFunc func(string, ...any)
 
 var desktopParseMu sync.Mutex
 
+// scanApplications walks the XDG application directories in decreasing
+// precedence, applies the D7 exclusion policy, and expands Exec/Terminal per
+// D8. A directory that fails to scan is logged and skipped; total failure
+// yields an empty set so the panel still opens.
+func scanApplications(getenv getenvFunc, lookPath lookPathFunc, logf logFunc) []Entry {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	raw := scanDesktopEntries(xdgAppDirs(getenv), logf)
+	filtered := filterEntries(raw, getenv("XDG_CURRENT_DESKTOP"), lookPath)
+	return expandDesktopEntries(filtered, getenv, lookPath, logf)
+}
+
+// xdgAppDirs returns the XDG application directories in decreasing precedence:
+// the user data home first, then each system data dir.
+func xdgAppDirs(getenv getenvFunc) []string {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	dataHome := getenv("XDG_DATA_HOME")
+	if dataHome == "" {
+		dataHome = filepath.Join(getenv("HOME"), ".local", "share")
+	}
+	dataDirs := getenv("XDG_DATA_DIRS")
+	if dataDirs == "" {
+		dataDirs = "/usr/local/share:/usr/share"
+	}
+	dirs := []string{filepath.Join(dataHome, "applications")}
+	for _, dir := range strings.Split(dataDirs, ":") {
+		if dir != "" {
+			dirs = append(dirs, filepath.Join(dir, "applications"))
+		}
+	}
+	return dirs
+}
+
 func filterEntries(entries []*desktopentry.Entry, currentDesktop string, lookPath lookPathFunc) []*desktopentry.Entry {
 	if lookPath == nil {
 		lookPath = exec.LookPath
