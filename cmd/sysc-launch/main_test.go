@@ -16,12 +16,22 @@ import (
 )
 
 type fakeService struct {
-	results      chan []launcher.Result
-	queries      []string
-	closed       atomic.Bool
-	closeStarted chan struct{}
-	closeRelease <-chan struct{}
-	closeDone    chan struct{}
+	mu              sync.Mutex
+	results         chan []launcher.Result
+	queries         []string
+	activations     []activation
+	activateErr     error
+	activateStarted chan struct{}
+	activateRelease <-chan struct{}
+	activateDone    chan struct{}
+	closed          atomic.Bool
+	closeStarted    chan struct{}
+	closeRelease    <-chan struct{}
+	closeDone       chan struct{}
+}
+
+type activation struct {
+	id, action string
 }
 
 func newFakeService(snapshots ...[]launcher.Result) *fakeService {
@@ -32,8 +42,30 @@ func newFakeService(snapshots ...[]launcher.Result) *fakeService {
 	return &fakeService{results: results}
 }
 
-func (s *fakeService) Query(query string)                { s.queries = append(s.queries, query) }
+func (s *fakeService) Query(query string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queries = append(s.queries, query)
+}
 func (s *fakeService) Results() <-chan []launcher.Result { return s.results }
+func (s *fakeService) Activate(id, action string) error {
+	s.mu.Lock()
+	s.activations = append(s.activations, activation{id: id, action: action})
+	err := s.activateErr
+	started, release, done := s.activateStarted, s.activateRelease, s.activateDone
+	s.mu.Unlock()
+
+	if started != nil {
+		close(started)
+	}
+	if release != nil {
+		<-release
+	}
+	if done != nil {
+		close(done)
+	}
+	return err
+}
 func (s *fakeService) Close() {
 	if s.closeStarted != nil {
 		close(s.closeStarted)
@@ -45,6 +77,18 @@ func (s *fakeService) Close() {
 	if s.closeDone != nil {
 		close(s.closeDone)
 	}
+}
+
+func (s *fakeService) queryTexts() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.queries...)
+}
+
+func (s *fakeService) activationCalls() []activation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]activation(nil), s.activations...)
 }
 
 func TestRunQueryWritesOneJSONSnapshot(t *testing.T) {
@@ -98,8 +142,8 @@ func TestRunQueryPassesOptionalQueryUnchanged(t *testing.T) {
 	if status != 0 {
 		t.Fatalf("run status = %d, stderr = %q", status, stderr.String())
 	}
-	if !reflect.DeepEqual(service.queries, []string{"  Needle  "}) {
-		t.Fatalf("queries = %q", service.queries)
+	if got := service.queryTexts(); !reflect.DeepEqual(got, []string{"  Needle  "}) {
+		t.Fatalf("queries = %q", got)
 	}
 	if got := decodeResults(t, stdout.Bytes()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("results = %+v, want %+v", got, want)
@@ -117,7 +161,10 @@ func TestRunRejectsInvalidArguments(t *testing.T) {
 	}{
 		{name: "missing command", want: "usage:"},
 		{name: "extra query argument", args: []string{"query", "one", "two"}, want: "at most one argument"},
-		{name: "unknown command", args: []string{"launch"}, want: `unknown command "launch"`},
+		{name: "missing launch ID", args: []string{"launch"}, want: "requires a desktop ID"},
+		{name: "empty launch ID", args: []string{"launch", ""}, want: "requires a desktop ID"},
+		{name: "extra launch argument", args: []string{"launch", "app.desktop", "action", "extra"}, want: "at most a desktop ID and action ID"},
+		{name: "unknown command", args: []string{"bogus"}, want: `unknown command "bogus"`},
 	}
 
 	for _, test := range tests {
@@ -148,6 +195,158 @@ func TestRunRejectsInvalidArguments(t *testing.T) {
 				t.Fatal("service was created for invalid arguments")
 			}
 		})
+	}
+}
+
+func TestRunLaunchActivatesTarget(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want activation
+	}{
+		{
+			name: "desktop ID",
+			args: []string{"launch", "editor.desktop"},
+			want: activation{id: "editor.desktop"},
+		},
+		{
+			name: "action ID",
+			args: []string{"launch", "editor.desktop", "new-window"},
+			want: activation{id: "editor.desktop", action: "new-window"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := newFakeService([]launcher.Result{})
+			var stdout, stderr bytes.Buffer
+
+			status := run(
+				test.args,
+				&stdout,
+				&stderr,
+				func(func(string, ...any)) queryService { return service },
+				time.Second,
+			)
+
+			if status != 0 {
+				t.Fatalf("run status = %d, stderr = %q", status, stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q", stdout.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q", stderr.String())
+			}
+			if got := service.activationCalls(); !reflect.DeepEqual(got, []activation{test.want}) {
+				t.Fatalf("activations = %+v, want %+v", got, test.want)
+			}
+			if !service.closed.Load() {
+				t.Fatal("service was not closed")
+			}
+		})
+	}
+}
+
+func TestRunLaunchReportsActivationFailure(t *testing.T) {
+	service := newFakeService([]launcher.Result{})
+	service.activateErr = errors.New("spawn failed")
+	var stdout, stderr bytes.Buffer
+
+	status := run(
+		[]string{"launch", "editor.desktop"},
+		&stdout,
+		&stderr,
+		func(func(string, ...any)) queryService { return service },
+		time.Second,
+	)
+
+	if status != 1 {
+		t.Fatalf("run status = %d, want 1", status)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "sysc-launch: activation: spawn failed") {
+		t.Fatalf("stderr = %q", got)
+	}
+	if !service.closed.Load() {
+		t.Fatal("service was not closed")
+	}
+}
+
+func TestRunBoundsActivationAndCleanup(t *testing.T) {
+	service := newFakeService([]launcher.Result{})
+	service.activateStarted = make(chan struct{})
+	service.activateDone = make(chan struct{})
+	service.closeStarted = make(chan struct{})
+	service.closeDone = make(chan struct{})
+	release := make(chan struct{})
+	service.activateRelease = release
+	service.closeRelease = release
+	var releaseOnce sync.Once
+	releaseService := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseService()
+
+	var stdout, stderr bytes.Buffer
+	returned := make(chan int, 1)
+	go func() {
+		returned <- run(
+			[]string{"launch", "editor.desktop"},
+			&stdout,
+			&stderr,
+			func(func(string, ...any)) queryService { return service },
+			time.Millisecond,
+		)
+	}()
+
+	select {
+	case <-service.activateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Activate was not invoked")
+	}
+
+	var status int
+	select {
+	case status = <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("run did not return while Activate and Close were blocked")
+	}
+	if status != 1 {
+		t.Fatalf("run status = %d, want 1", status)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "sysc-launch: activation: context deadline exceeded") {
+		t.Fatalf("stderr = %q", got)
+	}
+	select {
+	case <-service.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Close was not initiated")
+	}
+	select {
+	case <-service.activateDone:
+		t.Fatal("Activate returned before it was unblocked")
+	case <-service.closeDone:
+		t.Fatal("Close returned before it was unblocked")
+	default:
+	}
+
+	releaseService()
+	for name, done := range map[string]<-chan struct{}{
+		"Activate": service.activateDone,
+		"Close":    service.closeDone,
+	} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("%s did not finish after it was unblocked", name)
+		}
+	}
+	if !service.closed.Load() {
+		t.Fatal("service did not finish closing")
 	}
 }
 
