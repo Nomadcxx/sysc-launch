@@ -104,6 +104,40 @@ func main() {
 usage only after Niri reports a successful spawn. Call `Close` when the service
 is no longer needed.
 
+## Providers
+
+Applications is the default provider, reached by bare text or `/apps`. Append
+more through `ServiceConfig.Providers`:
+
+```go
+launcher.Provider{
+	Name:        "Calculator",
+	Prefix:      "/calc",
+	Glyph:       "glyph:calculate",
+	Description: "Arithmetic",
+	Query:       func(query string) []launcher.Result { /* ... */ },
+	Activate:    func(query, id, action string) error { /* ... */ },
+	Inline:      true,
+}
+```
+
+- `Prefix` must start with `/` and be unique; `/apps` is taken. A provider
+  with a bad or repeated prefix, or no `Query`, is logged through `Logf` and
+  skipped.
+- `/<prefix> text` sends `text` to that provider. A bare `/` (or an unknown
+  prefix) lists the registered providers, Applications first;
+  `ApplicationsGlyph` sets its glyph.
+- An `Inline` provider is also asked about bare text, and its rows are placed
+  above the application rows.
+- Each row belongs to the provider that produced it in the last published
+  result set. `Activate(id, action)` hands the row to that provider's
+  `Activate` with the routed query; a provider without one, or a row that is
+  no longer published, takes the spawn path. `Result.Action` names a desktop
+  action of `Result.Entry`. Successful activations are recorded in history
+  whichever provider ran them.
+- Provider functions run on the service goroutine and block queries and
+  activation while they run. They must not call back into the `Service`.
+
 ## Discovery and ranking
 
 The scanner reads `.desktop` files from `$XDG_DATA_HOME/applications` and each

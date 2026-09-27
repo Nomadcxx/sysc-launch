@@ -19,4 +19,6 @@ type Entry struct {
 type Result struct {
 	Entry Entry
 	Score int
+	// Action is a desktop action ID when this row is one of Entry's actions.
+	Action string
 }

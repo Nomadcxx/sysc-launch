@@ -21,7 +21,8 @@ const (
 // LookPath, and Now use the XDG desktop scanner, built-in ranker, Niri spawn,
 // os.Getenv, exec.LookPath, and time.Now. Non-positive StaleAfter and
 // ActivateTimeout use one minute and five seconds. Nil History disables usage
-// persistence and boosting; nil Logf suppresses scanner diagnostics.
+// persistence and boosting; nil Logf suppresses scanner and provider
+// diagnostics.
 type ServiceConfig struct {
 	Scan            func() []Entry
 	History         *History
@@ -33,6 +34,16 @@ type ServiceConfig struct {
 	Logf            func(string, ...any)
 	StaleAfter      time.Duration
 	ActivateTimeout time.Duration
+
+	// Providers are appended after Applications, in order. A provider whose
+	// prefix is empty, lacks the leading "/", repeats an earlier one, or is
+	// "/apps" is logged and skipped. Provider functions run on the service
+	// goroutine and block queries and activation while they run, so they
+	// must not call back into the Service.
+	Providers []Provider
+	// ApplicationsGlyph is the Applications row's overview glyph; empty
+	// uses PlaceholderGlyph.
+	ApplicationsGlyph string
 }
 
 var ErrServiceClosed = errors.New("launcher: service closed")
@@ -76,6 +87,9 @@ func NewService(cfg ServiceConfig) *Service {
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.Logf == nil {
+		cfg.Logf = func(string, ...any) {}
 	}
 	if cfg.StaleAfter <= 0 {
 		cfg.StaleAfter = defaultStaleAfter
@@ -133,9 +147,10 @@ func (s *Service) Results() <-chan []Result {
 	return s.results
 }
 
-// Activate spawns the entry (or one of its desktop actions) through
-// `niri msg action spawn` on the service goroutine and records usage only
-// when the spawn succeeds (D6/D9).
+// Activate runs a row of the last published result set on the service
+// goroutine. A row whose provider has an Activate function goes to it;
+// anything else spawns the entry (or one of its desktop actions) through
+// `niri msg action spawn` (D6/D9). Usage is recorded only on success.
 func (s *Service) Activate(id, action string) error {
 	req := activateRequest{id: id, action: action, reply: make(chan error, 1)}
 	select {
@@ -208,16 +223,51 @@ func (s *Service) work() {
 	if s.cfg.History != nil {
 		boost = s.cfg.History.boost
 	}
-	registry := []Provider{applicationsProvider(func(query string) []Result {
+	registry := buildRegistry(applicationsProvider(func(query string) []Result {
 		return s.cfg.Rank(entries, query, boost)
-	})}
+	}, s.cfg.ApplicationsGlyph), s.cfg.Providers, s.cfg.Logf)
 
-	run := func(text string) []Result {
+	// owners maps each row of the last published set to the registry index
+	// of the provider that produced it, so activation routes to that provider.
+	type rowKey struct{ id, action string }
+	owners := map[rowKey]int{}
+
+	run := func(text string) ([]Result, map[rowKey]int) {
+		own := map[rowKey]int{}
 		r := route(registry, text)
 		if r.provider == nil {
-			return r.overview
+			return r.overview, own
 		}
-		return r.provider.Query(r.query)
+		var out []Result
+		// Bare text also asks the inline providers; their rows go first.
+		if r.provider == &registry[0] && r.query != "" && !strings.HasPrefix(strings.TrimSpace(text), "/") {
+			for i := 1; i < len(registry); i++ {
+				if !registry[i].Inline {
+					continue
+				}
+				for _, res := range registry[i].Query(r.query) {
+					own[rowKey{res.Entry.ID, res.Action}] = i
+					out = append(out, res)
+				}
+			}
+		}
+		idx := 0
+		for i := range registry {
+			if &registry[i] == r.provider {
+				idx = i
+			}
+		}
+		rows := r.provider.Query(r.query)
+		for _, res := range rows {
+			k := rowKey{res.Entry.ID, res.Action}
+			if _, taken := own[k]; !taken {
+				own[k] = idx
+			}
+		}
+		if out == nil {
+			return rows, own // publish the provider's own slice, empty or not
+		}
+		return append(out, rows...), own
 	}
 
 	for {
@@ -229,18 +279,29 @@ func (s *Service) work() {
 			// Republish the current query against the new snapshot unless a
 			// newer query is already queued.
 			if len(s.queryCh) == 0 && s.gen.Load() == lastGen {
-				s.publishResults(run(lastQuery))
+				var out []Result
+				out, owners = run(lastQuery)
+				s.publishResults(out)
 			}
 		case req := <-s.queryCh:
 			lastQuery, lastGen = req.text, req.gen
-			out := run(req.text)
+			out, own := run(req.text)
 			if s.gen.Load() == req.gen {
+				owners = own
 				s.publishResults(out)
 			}
 		case req := <-s.activateCh:
 			recordQuery := lastQuery
 			if r := route(registry, lastQuery); r.provider != nil {
 				recordQuery = r.query
+			}
+			if i, ok := owners[rowKey{req.id, req.action}]; ok && registry[i].Activate != nil {
+				err := registry[i].Activate(recordQuery, req.id, req.action)
+				if err == nil && s.cfg.History != nil {
+					s.cfg.History.record(recordQuery, req.id)
+				}
+				req.reply <- err
+				continue
 			}
 			req.reply <- s.activate(entries, recordQuery, req.id, req.action)
 		}
