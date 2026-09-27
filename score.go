@@ -9,8 +9,6 @@ import (
 	"github.com/junegunn/fzf/src/util"
 )
 
-const resultLimit = 50
-
 var initFZF sync.Once
 
 // rank scores entries against query; boost, when non-nil, supplies the raw
@@ -19,7 +17,7 @@ var initFZF sync.Once
 func rank(entries []Entry, query string, boost func(query, identifier string) int) []Result {
 	query = strings.TrimSpace(query)
 	slab := util.MakeSlab(100*1024, 2048)
-	results := make([]Result, 0, min(len(entries), resultLimit))
+	results := make([]Result, 0, len(entries))
 	for _, entry := range entries {
 		score, matched := entryScore(entry, query, slab)
 		if !matched {
@@ -43,9 +41,6 @@ func rank(entries []Entry, query string, boost func(query, identifier string) in
 		}
 		return results[i].Entry.ID < results[j].Entry.ID
 	})
-	if len(results) > resultLimit {
-		results = results[:resultLimit]
-	}
 	return results
 }
 

@@ -55,7 +55,7 @@ func TestScoreSortsByScoreThenName(t *testing.T) {
 	}
 }
 
-func TestScoreCapsEveryQueryAtFifty(t *testing.T) {
+func TestScoreKeepsEveryMatch(t *testing.T) {
 	t.Parallel()
 
 	entries := make([]Entry, 60)
@@ -65,11 +65,11 @@ func TestScoreCapsEveryQueryAtFifty(t *testing.T) {
 	}
 	for _, query := range []string{"", "needle"} {
 		got := rank(entries, query, nil)
-		if len(got) != 50 {
-			t.Fatalf("query %q returned %d results", query, len(got))
+		if len(got) != 60 {
+			t.Fatalf("query %q returned %d results, want every match", query, len(got))
 		}
-		if got[0].Entry.Name != "App 00" || got[49].Entry.Name != "App 49" {
-			t.Fatalf("query %q bounds = %q .. %q", query, got[0].Entry.Name, got[49].Entry.Name)
+		if got[0].Entry.Name != "App 00" || got[59].Entry.Name != "App 59" {
+			t.Fatalf("query %q bounds = %q .. %q", query, got[0].Entry.Name, got[59].Entry.Name)
 		}
 	}
 }
