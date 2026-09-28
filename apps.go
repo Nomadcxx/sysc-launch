@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/go-freedesktop/desktopentry"
+	"github.com/rkoesters/xdg/keyfile"
 )
 
 type lookPathFunc func(string) (string, error)
@@ -170,6 +172,32 @@ func expandDesktopEntries(entries []*desktopentry.Entry, getenv getenvFunc, look
 	return out
 }
 
+// desktopFileExtras re-reads a .desktop keyfile for the two values the
+// upstream parser drops: the Actions= id list (parsed actions carry no IDs)
+// and the Path= working directory (the parser's Entry.Path holds the
+// .desktop file path for %k instead). An unreadable file yields nothing;
+// the entry still expands without IDs or a working directory.
+func desktopFileExtras(path string) (actionIDs []string, workDir string) {
+	if path == "" {
+		return nil, ""
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, ""
+	}
+	kf, err := keyfile.New(bytes.NewReader(raw))
+	if err != nil {
+		return nil, ""
+	}
+	if ids, err := kf.StringList("Desktop Entry", "Actions"); err == nil {
+		actionIDs = ids
+	}
+	if dir, err := kf.String("Desktop Entry", "Path"); err == nil {
+		workDir = dir
+	}
+	return actionIDs, workDir
+}
+
 func expandDesktopEntry(raw *desktopentry.Entry, getenv getenvFunc, lookPath lookPathFunc) (Entry, error) {
 	if raw == nil {
 		return Entry{}, fmt.Errorf("launcher: nil desktop entry")
@@ -178,7 +206,7 @@ func expandDesktopEntry(raw *desktopentry.Entry, getenv getenvFunc, lookPath loo
 	if err != nil {
 		return Entry{}, err
 	}
-	terminal := ""
+	var terminal []string
 	if raw.Terminal {
 		terminal, err = resolveTerminal(getenv, lookPath)
 		if err != nil {
@@ -187,28 +215,39 @@ func expandDesktopEntry(raw *desktopentry.Entry, getenv getenvFunc, lookPath loo
 		argv = terminalArgv(terminal, argv)
 	}
 
+	actionIDs, workDir := desktopFileExtras(raw.Path)
 	entry := Entry{
 		ID:          raw.ID,
 		Name:        raw.Name,
 		GenericName: raw.GenericName,
 		Keywords:    append([]string(nil), raw.Keywords...),
+		Categories:  append([]string(nil), raw.Categories...),
 		Argv:        argv,
 		Comment:     raw.Comment,
 		IconName:    raw.Icon,
+		WorkDir:     workDir,
 		Terminal:    raw.Terminal,
 	}
-	for _, action := range raw.Actions {
+	for i, action := range raw.Actions {
 		copy := *raw
 		copy.Exec = action.Exec
+		if action.Icon != "" {
+			// Spec: an action's %i uses the action icon when set.
+			copy.Icon = action.Icon
+		}
 		actionArgv, actionErr := copy.ExpandExec(nil, "")
 		if actionErr != nil {
 			continue
 		}
-		if terminal != "" {
+		if len(terminal) > 0 {
 			actionArgv = terminalArgv(terminal, actionArgv)
 		}
+		id := action.ID
+		if id == "" && i < len(actionIDs) {
+			id = actionIDs[i]
+		}
 		entry.Actions = append(entry.Actions, Action{
-			ID: action.ID, Name: action.Name, IconName: action.Icon, Argv: actionArgv,
+			ID: id, Name: action.Name, IconName: action.Icon, Argv: actionArgv,
 		})
 	}
 	return entry, nil

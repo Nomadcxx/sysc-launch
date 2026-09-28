@@ -310,12 +310,14 @@ func (s *Service) work() {
 
 func (s *Service) activate(entries []Entry, query, id, action string) error {
 	var argv []string
+	var workDir string
 	found := false
 	for _, entry := range entries {
 		if entry.ID != id {
 			continue
 		}
 		argv = entry.Argv
+		workDir = entry.WorkDir
 		found = true
 		if action != "" {
 			argv, found = nil, false
@@ -338,7 +340,13 @@ func (s *Service) activate(entries []Entry, query, id, action string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ActivateTimeout)
 	defer cancel()
-	spawn := append([]string{"niri", "msg", "action", "spawn", "--"}, argv...)
+	spawn := []string{"niri", "msg", "action", "spawn", "--"}
+	if workDir != "" {
+		// niri spawn has no cwd; sh keeps the target argv positional, so
+		// neither the directory nor the arguments need quoting.
+		spawn = append(spawn, "sh", "-c", `cd "$1" && shift && exec "$@"`, "sh", workDir)
+	}
+	spawn = append(spawn, argv...)
 	if err := run(ctx, spawn); err != nil {
 		return err
 	}

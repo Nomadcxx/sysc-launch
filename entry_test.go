@@ -14,6 +14,8 @@ func TestEntryCarriesLauncherFields(t *testing.T) {
 		Name:        "Browser",
 		GenericName: "Web Browser",
 		Keywords:    []string{"web", "internet"},
+		Categories:  []string{"Network", "WebBrowser"},
+		WorkDir:     "/srv/browser",
 		Argv:        []string{"browser"},
 		Comment:     "Browse the web",
 		IconName:    "browser",
@@ -26,6 +28,7 @@ func TestEntryCarriesLauncherFields(t *testing.T) {
 		result.Entry.GenericName != entry.GenericName || result.Entry.Comment != entry.Comment ||
 		result.Entry.IconName != entry.IconName || !result.Entry.Terminal || result.Score != 42 ||
 		!slices.Equal(result.Entry.Keywords, entry.Keywords) || !slices.Equal(result.Entry.Argv, entry.Argv) ||
+		!slices.Equal(result.Entry.Categories, entry.Categories) || result.Entry.WorkDir != entry.WorkDir ||
 		len(result.Entry.Actions) != 1 || !slices.Equal(result.Entry.Actions[0].Argv, action.Argv) {
 		t.Fatalf("result lost entry fields: %+v", result)
 	}

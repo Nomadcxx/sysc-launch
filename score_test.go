@@ -17,6 +17,7 @@ func TestScoreMatchesEveryApprovedField(t *testing.T) {
 		{name: "keywords", entry: Entry{Name: "App", Keywords: []string{"Needle"}}},
 		{name: "exec", entry: Entry{Name: "App", Argv: []string{"needle"}}},
 		{name: "comment", entry: Entry{Name: "App", Comment: "Needle"}},
+		{name: "categories", entry: Entry{Name: "App", Categories: []string{"Needle"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -80,5 +81,20 @@ func TestScoreDoesNotSearchDesktopActions(t *testing.T) {
 	got := rank([]Entry{{Name: "Editor", Actions: []Action{{Name: "Needle"}}}}, "needle", nil)
 	if len(got) != 0 {
 		t.Fatalf("desktop action matched search: %+v", got)
+	}
+}
+
+func TestScoreRanksCategoriesBelowName(t *testing.T) {
+	t.Parallel()
+
+	got := rank([]Entry{
+		{Name: "Gimp", Categories: []string{"Graphics", "2DGraphics"}},
+		{Name: "Graphics Editor"},
+	}, "Graphics", nil)
+	if len(got) != 2 {
+		t.Fatalf("category query returned %d results, want 2", len(got))
+	}
+	if got[0].Entry.Name != "Graphics Editor" || got[1].Entry.Name != "Gimp" {
+		t.Fatalf("order = %+v", got)
 	}
 }

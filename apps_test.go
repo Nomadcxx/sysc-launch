@@ -147,3 +147,106 @@ func writeDesktop(t *testing.T, dir, name, body string) {
 		t.Fatal(err)
 	}
 }
+
+func TestExpandDesktopActionUsesActionIcon(t *testing.T) {
+	t.Parallel()
+
+	raw := &desktopentry.Entry{
+		ID: "editor", Exec: "editor", Icon: "editor-icon",
+		Actions: []desktopentry.Action{
+			{ID: "with-icon", Name: "New Window", Exec: "editor --new %i", Icon: "window-new"},
+			{ID: "no-icon", Name: "About", Exec: "editor --about %i"},
+		},
+	}
+	entry, err := expandDesktopEntry(raw, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"editor", "--new", "--icon", "window-new"}; !slices.Equal(entry.Actions[0].Argv, want) {
+		t.Fatalf("action with own icon: argv = %q, want %q", entry.Actions[0].Argv, want)
+	}
+	if want := []string{"editor", "--about", "--icon", "editor-icon"}; !slices.Equal(entry.Actions[1].Argv, want) {
+		t.Fatalf("action without own icon: argv = %q, want %q", entry.Actions[1].Argv, want)
+	}
+}
+
+func TestTerminalConfiguredWithArguments(t *testing.T) {
+	t.Parallel()
+
+	var looked []string
+	entry, err := expandDesktopEntry(
+		&desktopentry.Entry{Exec: "htop", Terminal: true},
+		func(key string) string {
+			if key == "TERMINAL" {
+				return "kitty --single-instance"
+			}
+			return ""
+		},
+		func(name string) (string, error) {
+			looked = append(looked, name)
+			if name == "kitty" {
+				return "/usr/bin/kitty", nil
+			}
+			return "", errors.New("not found")
+		},
+	)
+	if err != nil {
+		t.Fatalf("terminal flags must not poison LookPath: %v", err)
+	}
+	if !slices.Equal(looked, []string{"kitty"}) {
+		t.Fatalf("lookPath tried %q, want only the binary", looked)
+	}
+	want := []string{"/usr/bin/kitty", "--single-instance", "-e", "htop"}
+	if !slices.Equal(entry.Argv, want) {
+		t.Fatalf("argv = %q, want %q", entry.Argv, want)
+	}
+}
+
+func TestScanPreservesActionIDsAndWorkDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	appDir := filepath.Join(dir, "applications")
+	if err := os.Mkdir(appDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeDesktop(t, appDir, "org.example.Game.desktop", `[Desktop Entry]
+Type=Application
+Name=Game
+Exec=./game
+Path=/srv/game
+Actions=NewWindow;Quit;
+
+[Desktop Action NewWindow]
+Name=New Window
+Exec=./game --new
+
+[Desktop Action Quit]
+Name=Quit
+Exec=./game --quit
+`)
+	env := func(key string) string {
+		switch key {
+		case "XDG_DATA_HOME":
+			return dir
+		case "XDG_DATA_DIRS":
+			return "/nonexistent"
+		}
+		return ""
+	}
+	got := scanApplications(env, func(string) (string, error) { return "", errors.New("not found") }, nil)
+	if len(got) != 1 {
+		t.Fatalf("entries = %+v", got)
+	}
+	entry := got[0]
+	if entry.ID != "org.example.Game" || entry.WorkDir != "/srv/game" {
+		t.Fatalf("entry = %+v", entry)
+	}
+	if len(entry.Actions) != 2 ||
+		entry.Actions[0].ID != "NewWindow" || entry.Actions[1].ID != "Quit" {
+		t.Fatalf("action IDs = %+v", entry.Actions)
+	}
+	if !slices.Equal(entry.Categories, []string(nil)) && len(entry.Categories) != 0 {
+		t.Fatalf("categories = %q", entry.Categories)
+	}
+}

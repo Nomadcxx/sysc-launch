@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/junegunn/go-shellwords"
 )
 
 var ErrNoTerminal = errors.New("launcher: no terminal found")
@@ -13,7 +15,9 @@ var terminalCandidates = [...]string{"kitty", "foot", "alacritty", "wezterm", "g
 
 type getenvFunc func(string) string
 
-func resolveTerminal(getenv getenvFunc, lookPath lookPathFunc) (string, error) {
+// resolveTerminal returns the terminal's argv prefix (binary plus any flags
+// from a $TERMINAL value such as "kitty --single-instance").
+func resolveTerminal(getenv getenvFunc, lookPath lookPathFunc) ([]string, error) {
 	if getenv == nil {
 		getenv = os.Getenv
 	}
@@ -21,22 +25,27 @@ func resolveTerminal(getenv getenvFunc, lookPath lookPathFunc) (string, error) {
 		lookPath = exec.LookPath
 	}
 	if configured := strings.TrimSpace(getenv("TERMINAL")); configured != "" {
-		path, err := lookPath(configured)
-		if err != nil {
-			return "", ErrNoTerminal
+		words, err := shellwords.Parse(configured)
+		if err != nil || len(words) == 0 {
+			return nil, ErrNoTerminal
 		}
-		return path, nil
+		path, err := lookPath(words[0])
+		if err != nil {
+			return nil, ErrNoTerminal
+		}
+		return append([]string{path}, words[1:]...), nil
 	}
 	for _, candidate := range terminalCandidates {
 		if path, err := lookPath(candidate); err == nil {
-			return path, nil
+			return []string{path}, nil
 		}
 	}
-	return "", ErrNoTerminal
+	return nil, ErrNoTerminal
 }
 
-func terminalArgv(terminal string, argv []string) []string {
-	out := make([]string, 0, len(argv)+2)
-	out = append(out, terminal, "-e")
+func terminalArgv(terminal []string, argv []string) []string {
+	out := make([]string, 0, len(terminal)+len(argv)+1)
+	out = append(out, terminal...)
+	out = append(out, "-e")
 	return append(out, argv...)
 }

@@ -46,7 +46,10 @@ provider-prefix routing; `/apps` selects installed applications.
 niri msg action spawn -- PROGRAM [ARG...]
 ```
 
-Arguments come from the desktop entry and are passed without a shell.
+Arguments come from the desktop entry and are passed without a shell. An
+entry with a `Path=` working directory is instead spawned as
+`sh -c 'cd "$1" && shift && exec "$@"' sh PATH PROGRAM [ARG...]` because
+Niri's spawn action takes no directory.
 
 ## Library
 
@@ -146,12 +149,13 @@ fallbacks apply when those variables are unset. User entries take precedence.
 It excludes entries marked `Hidden` or `NoDisplay`, entries rejected by
 `OnlyShowIn` or `NotShowIn`, and entries whose `TryExec` is unavailable.
 
-`Terminal=true` entries use `$TERMINAL` when configured, then try `kitty`,
+`Terminal=true` entries use `$TERMINAL` when configured (the value may
+include arguments), then try `kitty`,
 `foot`, `alacritty`, `wezterm`, and `ghostty`. Such an entry is excluded when
 no terminal can be resolved. Valid desktop actions are exposed separately and
 can be selected by action ID.
 
-Application names, generic names, keywords, commands, and comments are fuzzy
+Application names, generic names, keywords, commands, comments, and categories are fuzzy
 matched with fzf's ranking algorithm. Recent and repeated successful launches
 add a usage boost capped at 25 points, so history influences ranking without
 overwhelming a clearly better text match.

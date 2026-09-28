@@ -10,10 +10,13 @@ type Action struct {
 type Entry struct {
 	ID, Name, GenericName string
 	Keywords              []string
+	Categories            []string
 	Argv                  []string
 	Comment, IconName     string
-	Terminal              bool
-	Actions               []Action
+	// WorkDir is the desktop entry's Path= working directory, empty when unset.
+	WorkDir  string
+	Terminal bool
+	Actions  []Action
 }
 
 type Result struct {

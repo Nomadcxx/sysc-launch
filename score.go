@@ -59,6 +59,7 @@ func entryScore(entry Entry, query string, slab *util.Slab) (int, bool) {
 		strings.Join(entry.Keywords, " "),
 		strings.Join(entry.Argv, " "),
 		entry.Comment,
+		strings.Join(entry.Categories, " "),
 	}
 	best, matched := 0, false
 	for i, field := range fields {

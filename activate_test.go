@@ -3,6 +3,7 @@ package launcher
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -145,5 +146,73 @@ func TestActivateWithoutNiriIsErrorNotPanic(t *testing.T) {
 
 	if err := svc.Activate("firefox.desktop", ""); err == nil {
 		t.Fatal("missing niri returned nil error")
+	}
+}
+
+func TestActivateRealScanAction(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	appDir := filepath.Join(dir, "applications")
+	if err := os.Mkdir(appDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "org.example.Editor.desktop"), []byte(`[Desktop Entry]
+Type=Application
+Name=Editor
+Exec=editor
+Actions=NewWindow;
+
+[Desktop Action NewWindow]
+Name=New Window
+Exec=editor --new-window
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := func(key string) string {
+		switch key {
+		case "XDG_DATA_HOME":
+			return dir
+		case "XDG_DATA_DIRS":
+			return "/nonexistent"
+		}
+		return ""
+	}
+	entries := scanApplications(env, func(string) (string, error) { return "", errors.New("not found") }, nil)
+
+	runner := &recordRunner{}
+	svc := NewService(ServiceConfig{Scan: func() []Entry { return entries }, Run: runner.run})
+	t.Cleanup(svc.Close)
+	recvResults(t, svc)
+
+	if err := svc.Activate("org.example.Editor", "NewWindow"); err != nil {
+		t.Fatalf("Activate scanned action: %v", err)
+	}
+	want := []string{"niri", "msg", "action", "spawn", "--", "editor", "--new-window"}
+	if got := runner.lastArgv(); !slices.Equal(got, want) {
+		t.Fatalf("action argv = %q, want %q", got, want)
+	}
+}
+
+func TestActivateWorkDirSpawnsViaSh(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordRunner{}
+	svc := NewService(ServiceConfig{
+		Scan: func() []Entry {
+			return []Entry{{ID: "game", Name: "Game", Argv: []string{"./game"}, WorkDir: "/srv/game"}}
+		},
+		Run: runner.run,
+	})
+	t.Cleanup(svc.Close)
+	recvResults(t, svc)
+
+	if err := svc.Activate("game", ""); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	want := []string{"niri", "msg", "action", "spawn", "--",
+		"sh", "-c", `cd "$1" && shift && exec "$@"`, "sh", "/srv/game", "./game"}
+	if got := runner.lastArgv(); !slices.Equal(got, want) {
+		t.Fatalf("spawn argv = %q, want %q", got, want)
 	}
 }
