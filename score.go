@@ -53,11 +53,15 @@ func entryScore(entry Entry, query string, slab *util.Slab) (int, bool) {
 	if query == "" {
 		return 0, true
 	}
+	exec := entry.ExecArgv
+	if len(exec) == 0 {
+		exec = entry.Argv
+	}
 	fields := [...]string{
 		entry.Name,
 		entry.GenericName,
 		strings.Join(entry.Keywords, " "),
-		strings.Join(entry.Argv, " "),
+		strings.Join(exec, " "),
 		entry.Comment,
 		strings.Join(entry.Categories, " "),
 	}

@@ -98,3 +98,26 @@ func TestScoreRanksCategoriesBelowName(t *testing.T) {
 		t.Fatalf("order = %+v", got)
 	}
 }
+
+func TestRankIgnoresTerminalWrapper(t *testing.T) {
+	t.Parallel()
+
+	// What expandDesktopEntry stores for Terminal=true with kitty resolved.
+	entry := Entry{
+		ID:       "htop.desktop",
+		Name:     "Htop",
+		Argv:     []string{"/usr/bin/kitty", "-e", "htop"},
+		ExecArgv: []string{"htop"},
+		Terminal: true,
+	}
+	entries := []Entry{entry}
+	if got := rank(entries, "kitty", nil); len(got) != 0 {
+		t.Fatalf("terminal wrapper must not match %q: %+v", "kitty", got)
+	}
+	if got := rank(entries, "usr", nil); len(got) != 0 {
+		t.Fatalf("terminal wrapper path must not match %q: %+v", "usr", got)
+	}
+	if got := rank(entries, "htop", nil); len(got) != 1 {
+		t.Fatalf("pre-wrap Exec token must match, got %+v", got)
+	}
+}

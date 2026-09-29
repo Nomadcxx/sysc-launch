@@ -206,6 +206,11 @@ func expandDesktopEntry(raw *desktopentry.Entry, getenv getenvFunc, lookPath loo
 	if err != nil {
 		return Entry{}, err
 	}
+	if len(argv) == 0 {
+		// Field-code-only Exec (e.g. "%f %u") leaves no program to spawn.
+		return Entry{}, fmt.Errorf("launcher: Exec %q expands to no program", raw.Exec)
+	}
+	execArgv := argv
 	var terminal []string
 	if raw.Terminal {
 		terminal, err = resolveTerminal(getenv, lookPath)
@@ -223,6 +228,7 @@ func expandDesktopEntry(raw *desktopentry.Entry, getenv getenvFunc, lookPath loo
 		Keywords:    append([]string(nil), raw.Keywords...),
 		Categories:  append([]string(nil), raw.Categories...),
 		Argv:        argv,
+		ExecArgv:    execArgv,
 		Comment:     raw.Comment,
 		IconName:    raw.Icon,
 		WorkDir:     workDir,
@@ -236,7 +242,7 @@ func expandDesktopEntry(raw *desktopentry.Entry, getenv getenvFunc, lookPath loo
 			copy.Icon = action.Icon
 		}
 		actionArgv, actionErr := copy.ExpandExec(nil, "")
-		if actionErr != nil {
+		if actionErr != nil || len(actionArgv) == 0 {
 			continue
 		}
 		if len(terminal) > 0 {

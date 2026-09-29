@@ -250,3 +250,31 @@ Exec=./game --quit
 		t.Fatalf("categories = %q", entry.Categories)
 	}
 }
+
+func TestScanExcludesFieldCodeOnlyExec(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	appDir := filepath.Join(dir, "applications")
+	if err := os.Mkdir(appDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeDesktop(t, appDir, "opendesktop.desktop", `[Desktop Entry]
+Type=Application
+Name=Open Desktop
+Exec=%f %u
+`)
+	env := func(key string) string {
+		switch key {
+		case "XDG_DATA_HOME":
+			return dir
+		case "XDG_DATA_DIRS":
+			return "/nonexistent"
+		}
+		return ""
+	}
+	got := scanApplications(env, func(string) (string, error) { return "", errors.New("not found") }, nil)
+	if len(got) != 0 {
+		t.Fatalf("field-code-only Exec must be excluded, got %+v", got)
+	}
+}

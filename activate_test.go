@@ -216,3 +216,24 @@ func TestActivateWorkDirSpawnsViaSh(t *testing.T) {
 		t.Fatalf("spawn argv = %q, want %q", got, want)
 	}
 }
+
+func TestActivateRefusesEmptyArgv(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordRunner{}
+	svc := NewService(ServiceConfig{
+		Scan: func() []Entry {
+			return []Entry{{ID: "broken.desktop", Name: "Broken"}}
+		},
+		Run: runner.run,
+	})
+	t.Cleanup(svc.Close)
+	recvResults(t, svc)
+
+	if err := svc.Activate("broken.desktop", ""); err == nil {
+		t.Fatal("empty argv must not spawn")
+	}
+	if len(runner.argvs) != 0 {
+		t.Fatalf("runner called with %v", runner.argvs)
+	}
+}

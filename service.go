@@ -333,6 +333,9 @@ func (s *Service) activate(entries []Entry, query, id, action string) error {
 	if !found {
 		return fmt.Errorf("launcher: no entry %q action %q", id, action)
 	}
+	if len(argv) == 0 {
+		return fmt.Errorf("launcher: entry %q action %q has no program to spawn", id, action)
+	}
 
 	run := s.cfg.Run
 	if run == nil {
