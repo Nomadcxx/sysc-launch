@@ -14,8 +14,8 @@ type Entry struct {
 	Argv                  []string
 	// ExecArgv holds the desktop Exec tokens before terminal wrapping and is
 	// what ranking searches; empty falls back to Argv (provider entries).
-	ExecArgv []string
-	Comment, IconName     string
+	ExecArgv          []string
+	Comment, IconName string
 	// WorkDir is the desktop entry's Path= working directory, empty when unset.
 	WorkDir  string
 	Terminal bool
