@@ -32,6 +32,8 @@ Desktop scanning and `query` work without Niri.
 
 ## Build and install
 
+### Go installation
+
 From a clone of this repository:
 
 ```sh
@@ -41,6 +43,20 @@ go install ./cmd/sysc-launch
 
 `go install` writes the command to `GOBIN`, or to Go's default binary directory
 when `GOBIN` is unset.
+
+### AUR
+
+On Arch, install [sysc-launch](https://aur.archlinux.org/packages/sysc-launch) with
+your AUR helper:
+
+```sh
+yay -S sysc-launch
+```
+
+This installs the diagnostic command. sysc-shell compiles the launcher library
+into its own binary and does not need this package to show its launcher.
+
+[Documentation](https://nomadcxx.github.io/sysc/docs/).
 
 ## CLI
 
