@@ -1,0 +1,7 @@
+{
+ "sysc-launch: launch accepts at most a desktop ID and action ID": "sysc-launch: launch는 데스크톱 ID와 작업 ID까지 허용됩니다",
+ "sysc-launch: launch requires a desktop ID": "sysc-launch: launch 에는 데스크톱 ID가 필요합니다",
+ "sysc-launch: query accepts at most one argument": "sysc-launch: query 인자는 최대 1개입니다",
+ "sysc-launch: unknown command %q\n": "sysc-launch: 알 수 없는 명령 %q\n",
+ "usage: sysc-launch query [QUERY]\n       sysc-launch launch DESKTOP_ID [ACTION_ID]\n": "사용법: sysc-launch query [QUERY]\n         sysc-launch launch DESKTOP_ID [ACTION_ID]\n"
+}
