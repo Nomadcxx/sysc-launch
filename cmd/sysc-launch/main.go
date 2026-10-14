@@ -40,30 +40,30 @@ func run(
 	timeout time.Duration,
 ) int {
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
+		fmt.Fprint(stderr, help(usage))
 		return 2
 	}
 	switch args[0] {
 	case "query":
 		if len(args) > 2 {
-			fmt.Fprintln(stderr, "sysc-launch: query accepts at most one argument")
-			fmt.Fprint(stderr, usage)
+			fmt.Fprintln(stderr, help("sysc-launch: query accepts at most one argument"))
+			fmt.Fprint(stderr, help(usage))
 			return 2
 		}
 	case "launch":
 		if len(args) < 2 || args[1] == "" {
-			fmt.Fprintln(stderr, "sysc-launch: launch requires a desktop ID")
-			fmt.Fprint(stderr, usage)
+			fmt.Fprintln(stderr, help("sysc-launch: launch requires a desktop ID"))
+			fmt.Fprint(stderr, help(usage))
 			return 2
 		}
 		if len(args) > 3 {
-			fmt.Fprintln(stderr, "sysc-launch: launch accepts at most a desktop ID and action ID")
-			fmt.Fprint(stderr, usage)
+			fmt.Fprintln(stderr, help("sysc-launch: launch accepts at most a desktop ID and action ID"))
+			fmt.Fprint(stderr, help(usage))
 			return 2
 		}
 	default:
-		fmt.Fprintf(stderr, "sysc-launch: unknown command %q\n", args[0])
-		fmt.Fprint(stderr, usage)
+		fmt.Fprintf(stderr, help("sysc-launch: unknown command %q\n"), args[0])
+		fmt.Fprint(stderr, help(usage))
 		return 2
 	}
 

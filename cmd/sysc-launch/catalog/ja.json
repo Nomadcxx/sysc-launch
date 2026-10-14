@@ -1,0 +1,7 @@
+{
+ "sysc-launch: launch accepts at most a desktop ID and action ID": "sysc-launch: launch はデスクトップ ID とアクション ID が最大です",
+ "sysc-launch: launch requires a desktop ID": "sysc-launch: launch にはデスクトップ ID が必要です",
+ "sysc-launch: query accepts at most one argument": "sysc-launch: query の引数は 1 個までです",
+ "sysc-launch: unknown command %q\n": "sysc-launch: 不明なコマンド %q\n",
+ "usage: sysc-launch query [QUERY]\n       sysc-launch launch DESKTOP_ID [ACTION_ID]\n": "使い方: sysc-launch query [QUERY]\n           sysc-launch launch DESKTOP_ID [ACTION_ID]\n"
+}

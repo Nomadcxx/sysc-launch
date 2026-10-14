@@ -1,0 +1,7 @@
+{
+ "sysc-launch: launch accepts at most a desktop ID and action ID": "sysc-launch: launch aceita no máximo um ID de desktop e um ID de ação",
+ "sysc-launch: launch requires a desktop ID": "sysc-launch: launch exige um ID de desktop",
+ "sysc-launch: query accepts at most one argument": "sysc-launch: query aceita no máximo um argumento",
+ "sysc-launch: unknown command %q\n": "sysc-launch: comando desconhecido %q\n",
+ "usage: sysc-launch query [QUERY]\n       sysc-launch launch DESKTOP_ID [ACTION_ID]\n": "uso: sysc-launch query [QUERY]\n       sysc-launch launch DESKTOP_ID [ACTION_ID]\n"
+}
