@@ -27,20 +27,24 @@ func help(s string) string {
 
 func helpLocale() string {
 	for _, name := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
-		tag := strings.ToLower(os.Getenv(name))
-		if tag == "" || tag == "c" || tag == "posix" {
+		tag := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+		if tag == "" {
 			continue
 		}
 		base := tag
 		for i, r := range tag {
-			if r == '_' || r == '.' || r == '@' {
+			if r == '_' || r == '-' || r == '.' || r == '@' {
 				base = tag[:i]
 				break
 			}
 		}
 		switch base {
+		case "c", "posix":
+			return ""
 		case "es", "pt", "ja", "ko", "ru":
 			return base
+		default:
+			return ""
 		}
 	}
 	return ""
