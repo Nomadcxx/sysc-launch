@@ -26,9 +26,9 @@ owns the launcher panel and all presentation.
 ## Requirements
 
 - Go 1.26.4
-- Niri in `PATH` for activation
+- A compositor CLI in `PATH` for activation: `sysc-compositor` if present, otherwise `niri`
 
-Desktop scanning and `query` work without Niri.
+Desktop scanning and `query` work without either.
 
 ## Build and install
 
@@ -74,8 +74,10 @@ provider-prefix routing; `/apps` selects installed applications.
 `launch` activates the identified application or optional desktop action via:
 
 ```text
-niri msg action spawn -- PROGRAM [ARG...]
+sysc-compositor msg action spawn -- PROGRAM [ARG...]
 ```
+
+or, when `sysc-compositor` is not installed, the same command through `niri`.
 
 Arguments come from the desktop entry and are passed without a shell. An
 entry with a `Path=` working directory is instead spawned as

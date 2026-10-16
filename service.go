@@ -18,7 +18,7 @@ const (
 )
 
 // ServiceConfig wires the launcher service. Nil Scan, Rank, Run, Getenv,
-// LookPath, and Now use the XDG desktop scanner, built-in ranker, Niri spawn,
+// LookPath, and Now use the XDG desktop scanner, built-in ranker, compositor spawn,
 // os.Getenv, exec.LookPath, and time.Now. Non-positive StaleAfter and
 // ActivateTimeout use one minute and five seconds. Nil History disables usage
 // persistence and boosting; nil Logf suppresses scanner and provider
@@ -150,7 +150,8 @@ func (s *Service) Results() <-chan []Result {
 // Activate runs a row of the last published result set on the service
 // goroutine. A row whose provider has an Activate function goes to it;
 // anything else spawns the entry (or one of its desktop actions) through
-// `niri msg action spawn` (D6/D9). Usage is recorded only on success.
+// `<compositor> msg action spawn`, where the compositor CLI is sysc-compositor
+// or else niri (D6/D9). Usage is recorded only on success.
 func (s *Service) Activate(id, action string) error {
 	req := activateRequest{id: id, action: action, reply: make(chan error, 1)}
 	select {
@@ -339,7 +340,7 @@ func (s *Service) activate(entries []Entry, query, id, action string) error {
 
 	run := s.cfg.Run
 	if run == nil {
-		run = s.niriRun
+		run = s.compositorRun
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ActivateTimeout)
 	defer cancel()
@@ -359,19 +360,43 @@ func (s *Service) activate(entries []Entry, query, id, action string) error {
 	return nil
 }
 
-// niriRun is the production spawn path: argv only, no shell (D9). A missing
-// niri is an activation error, never a panic.
-func (s *Service) niriRun(ctx context.Context, argv []string) error {
+// compositorNames is the order the production runner looks for a compositor
+// CLI in: sysc-compositor speaks Niri's msg contract, and niri itself is the
+// fallback.
+var compositorNames = []string{"sysc-compositor", "niri"}
+
+// compositorBin is the path of the first compositor CLI lookPath finds.
+func compositorBin(lookPath func(string) (string, error)) (string, error) {
+	var firstErr error
+	for _, name := range compositorNames {
+		path, err := lookPath(name)
+		if err == nil {
+			return path, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return "", fmt.Errorf("launcher: no compositor in PATH (tried %s): %w",
+		strings.Join(compositorNames, ", "), firstErr)
+}
+
+// compositorRun is the production spawn path: argv only, no shell (D9). The
+// spawn argv names niri, which an injected Run sees unchanged; here its first
+// word is replaced with the compositor CLI found on PATH. A missing compositor
+// is an activation error, never a panic.
+func (s *Service) compositorRun(ctx context.Context, argv []string) error {
 	lookPath := s.cfg.LookPath
 	if lookPath == nil {
 		lookPath = exec.LookPath
 	}
-	if _, err := lookPath("niri"); err != nil {
-		return fmt.Errorf("launcher: niri not in PATH: %w", err)
+	bin, err := compositorBin(lookPath)
+	if err != nil {
+		return err
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := exec.CommandContext(ctx, bin, argv[1:]...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("launcher: %s: %w: %s", argv[0], err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("launcher: %s: %w: %s", bin, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
