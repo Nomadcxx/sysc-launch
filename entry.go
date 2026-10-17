@@ -1,10 +1,13 @@
 package launcher
 
+import "slices"
+
 const PlaceholderGlyph = "□"
 
 type Action struct {
 	ID, Name, IconName string
 	Argv               []string
+	ExecArgv           []string
 }
 
 type Entry struct {
@@ -19,7 +22,26 @@ type Entry struct {
 	// WorkDir is the desktop entry's Path= working directory, empty when unset.
 	WorkDir  string
 	Terminal bool
-	Actions  []Action
+	// TerminalApp is true when this entry names a supported terminal emulator
+	// whose argv can wrap Terminal=true applications with -e.
+	TerminalApp bool
+	Actions     []Action
+}
+
+func cloneEntries(entries []Entry) []Entry {
+	out := slices.Clone(entries)
+	for i := range out {
+		out[i].Keywords = slices.Clone(entries[i].Keywords)
+		out[i].Categories = slices.Clone(entries[i].Categories)
+		out[i].Argv = slices.Clone(entries[i].Argv)
+		out[i].ExecArgv = slices.Clone(entries[i].ExecArgv)
+		out[i].Actions = slices.Clone(entries[i].Actions)
+		for j := range out[i].Actions {
+			out[i].Actions[j].Argv = slices.Clone(entries[i].Actions[j].Argv)
+			out[i].Actions[j].ExecArgv = slices.Clone(entries[i].Actions[j].ExecArgv)
+		}
+	}
+	return out
 }
 
 type Result struct {

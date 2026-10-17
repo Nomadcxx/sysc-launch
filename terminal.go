@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/junegunn/go-shellwords"
@@ -48,4 +50,39 @@ func terminalArgv(terminal []string, argv []string) []string {
 	out = append(out, terminal...)
 	out = append(out, "-e")
 	return append(out, argv...)
+}
+
+func isTerminalEmulator(terminal bool, categories, argv []string, lookPath lookPathFunc) bool {
+	if terminal || len(argv) == 0 || !slices.Contains(categories, "TerminalEmulator") ||
+		!slices.Contains(terminalCandidates[:], filepath.Base(argv[0])) {
+		return false
+	}
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	_, err := lookPath(argv[0])
+	return err == nil
+}
+
+func resolveTerminalEntry(entries []Entry, id string, lookPath lookPathFunc) []string {
+	if id == "" {
+		return nil
+	}
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	for _, entry := range entries {
+		if entry.ID != id || !entry.TerminalApp || len(entry.Argv) == 0 ||
+			!slices.Contains(terminalCandidates[:], filepath.Base(entry.Argv[0])) {
+			continue
+		}
+		path, err := lookPath(entry.Argv[0])
+		if err != nil {
+			return nil
+		}
+		argv := slices.Clone(entry.Argv)
+		argv[0] = path
+		return argv
+	}
+	return nil
 }
