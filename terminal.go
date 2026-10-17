@@ -53,6 +53,17 @@ func isTerminalEmulator(terminal bool, categories, argv []string, lookPath lookP
 		!slices.Contains(terminalCandidates[:], filepath.Base(argv[0])) {
 		return false
 	}
+	if filepath.Base(argv[0]) == "foot" {
+		// ponytail: parse Foot's server switches only; add a focused case if Foot adds another mode.
+		for _, arg := range argv[1:] {
+			if arg == "--" {
+				break
+			}
+			if arg == "--server" || strings.HasPrefix(arg, "--server=") || strings.HasPrefix(arg, "-s") {
+				return false
+			}
+		}
+	}
 	if lookPath == nil {
 		lookPath = exec.LookPath
 	}

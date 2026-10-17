@@ -216,7 +216,12 @@ func TestExpandDesktopEntryMarksOnlySupportedTerminalEmulators(t *testing.T) {
 		raw  *desktopentry.Entry
 		want bool
 	}{
-		{name: "supported emulator", raw: &desktopentry.Entry{Exec: "foot --server", Categories: []string{"System", "TerminalEmulator"}}, want: true},
+		{name: "supported emulator", raw: &desktopentry.Entry{Exec: "foot", Categories: []string{"System", "TerminalEmulator"}}, want: true},
+		{name: "foot server mode", raw: &desktopentry.Entry{Exec: "foot --server", Categories: []string{"TerminalEmulator"}}},
+		{name: "foot server mode with path", raw: &desktopentry.Entry{Exec: "foot --server=/run/user/1000/foot.sock", Categories: []string{"TerminalEmulator"}}},
+		{name: "foot short server mode", raw: &desktopentry.Entry{Exec: "foot -s", Categories: []string{"TerminalEmulator"}}},
+		{name: "foot server mode after other options", raw: &desktopentry.Entry{Exec: "foot --login-shell --server", Categories: []string{"TerminalEmulator"}}},
+		{name: "server-like argument after option terminator", raw: &desktopentry.Entry{Exec: "foot -- --server", Categories: []string{"TerminalEmulator"}}, want: true},
 		{name: "not an emulator category", raw: &desktopentry.Entry{Exec: "foot", Categories: []string{"System"}}},
 		{name: "unsupported executable", raw: &desktopentry.Entry{Exec: "editor", Categories: []string{"TerminalEmulator"}}},
 		{name: "already runs in a terminal", raw: &desktopentry.Entry{Exec: "foot", Categories: []string{"TerminalEmulator"}, Terminal: true}},
