@@ -119,6 +119,22 @@ func TestHistoryUsageScoreFormula(t *testing.T) {
 	}
 }
 
+func TestHistoryExactQueryDistanceIsZeroWithRelatedHistory(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	h := historyWithUsage(now, "fire", "app.desktop", 1, now)
+	h.data["firefox"] = map[string]historyData{
+		"app.desktop": {Amount: 1, LastUsed: now},
+	}
+
+	for i := 0; i < 64; i++ {
+		if got := h.boost("fire", "app.desktop"); got != 13 {
+			t.Fatalf("boost with exact and related queries = %d, want 13 (iteration %d)", got, i)
+		}
+	}
+}
+
 func TestHistoryUsageCurveSeparatesCountAndRecency(t *testing.T) {
 	t.Parallel()
 

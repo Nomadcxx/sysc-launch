@@ -140,6 +140,7 @@ func (h *History) boost(query, identifier string) int {
 // stored query prefix-related to query (all of them when query is empty),
 // returning the smallest contributing prefix-length delta.
 func (h *History) usageLocked(query, identifier string) (amount int, lastUsed time.Time, delta int) {
+	deltaFound := false
 	for stored, queries := range h.data {
 		if query != "" && !strings.HasPrefix(query, stored) && !strings.HasPrefix(stored, query) {
 			continue
@@ -164,8 +165,9 @@ func (h *History) usageLocked(query, identifier string) (amount int, lastUsed ti
 			if d < 0 {
 				d = -d
 			}
-			if delta == 0 || d < delta {
+			if !deltaFound || d < delta {
 				delta = d
+				deltaFound = true
 			}
 		}
 	}
