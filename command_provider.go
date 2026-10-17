@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -16,6 +17,7 @@ import (
 // row, and 200 results; make them configurable only if real providers need more.
 const (
 	commandProviderTimeout    = 2 * time.Second
+	commandProviderWaitDelay  = 150 * time.Millisecond
 	commandProviderMaxOutput  = 256 << 10
 	commandProviderMaxResults = 200
 	commandProviderMaxLine    = 4 << 10
@@ -52,8 +54,11 @@ func newCommandProvider(cfg CommandProviderConfig, run commandProviderRunner, ti
 			if len(cfg.Command) == 0 || cfg.Command[0] == "" {
 				return commandProviderError(cfg, errorID, errors.New("command is empty"))
 			}
+			if strings.Contains(cfg.Command[0], "{query}") {
+				return commandProviderError(cfg, errorID, errors.New("command provider executable cannot contain {query}"))
+			}
 			argv := append([]string(nil), cfg.Command...)
-			for i := range argv {
+			for i := 1; i < len(argv); i++ {
 				argv[i] = strings.ReplaceAll(argv[i], "{query}", query)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -131,11 +136,28 @@ func runCommandProvider(ctx context.Context, argv []string) ([]byte, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	killProcessGroup := func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+	cmd.Cancel = killProcessGroup
+	cmd.WaitDelay = commandProviderWaitDelay
 	var out commandProviderBuffer
 	out.cancel = cancel
 	cmd.Stdout = &out
 	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	if err := killProcessGroup(); err != nil {
+		return nil, fmt.Errorf("kill command provider process group: %w", err)
+	}
+	if err != nil {
 		if out.exceeded {
 			return nil, errCommandProviderOutputLimit
 		}

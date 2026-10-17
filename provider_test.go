@@ -3,6 +3,9 @@ package launcher
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -78,6 +81,24 @@ func TestCommandProviderPassesQueryAsArgvDataAndParsesRows(t *testing.T) {
 	}
 }
 
+func TestCommandProviderDoesNotSubstituteTheExecutable(t *testing.T) {
+	called := false
+	provider := newCommandProvider(CommandProviderConfig{
+		Name: "Files", Prefix: "/files", Command: []string{"{query}", "--query={query}"},
+	}, func(_ context.Context, argv []string) ([]byte, error) {
+		called = true
+		return []byte(strings.Join(argv, " ") + "\n"), nil
+	}, time.Second)
+
+	got := provider.Query("run-this")
+	if called {
+		t.Fatal("query text selected the executable")
+	}
+	if len(got) != 1 || !strings.Contains(got[0].Entry.Comment, "executable") {
+		t.Fatalf("invalid executable template result = %+v", got)
+	}
+}
+
 func TestCommandProviderEmptyOutputReturnsEmptyRows(t *testing.T) {
 	provider := newCommandProvider(CommandProviderConfig{
 		Name: "Files", Prefix: "/files", Command: []string{"listing"},
@@ -128,6 +149,129 @@ func TestCommandProviderTimesOutAndCancelsRunner(t *testing.T) {
 	got := provider.Query("")
 	if len(got) != 1 || !strings.Contains(got[0].Entry.Comment, "deadline exceeded") {
 		t.Fatalf("timed out command result = %+v", got)
+	}
+}
+
+const (
+	providerHelperModeEnv = "SYSC_LAUNCH_PROVIDER_HELPER_MODE"
+	providerHelperStarted = "SYSC_LAUNCH_PROVIDER_HELPER_STARTED"
+	providerHelperMarker  = "SYSC_LAUNCH_PROVIDER_HELPER_MARKER"
+)
+
+func TestCommandProviderProcessTreeHelper(t *testing.T) {
+	switch os.Getenv(providerHelperModeEnv) {
+	case "parent":
+		child := exec.Command(os.Args[0], "-test.run=^TestCommandProviderProcessTreeHelper$")
+		child.Env = append(os.Environ(), providerHelperModeEnv+"=child")
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		_ = child.Wait()
+	case "orphan":
+		child := exec.Command(os.Args[0], "-test.run=^TestCommandProviderProcessTreeHelper$")
+		child.Env = append(os.Environ(), providerHelperModeEnv+"=child")
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+	case "child":
+		if err := os.WriteFile(os.Getenv(providerHelperStarted), []byte("started"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(500 * time.Millisecond)
+		_ = os.WriteFile(os.Getenv(providerHelperMarker), []byte("survived"), 0o600)
+	}
+}
+
+func TestRunCommandProviderCleansChildrenAfterParentExits(t *testing.T) {
+	started := filepath.Join(t.TempDir(), "started")
+	marker := filepath.Join(t.TempDir(), "survived")
+	t.Setenv(providerHelperModeEnv, "orphan")
+	t.Setenv(providerHelperStarted, started)
+	t.Setenv(providerHelperMarker, marker)
+	// The helper binaries run under -race too; avoid its one-second exit delay
+	// masking the provider's 150 ms pipe cleanup bound.
+	t.Setenv("GORACE", "atexit_sleep_ms=0")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runCommandProvider(context.Background(), []string{os.Args[0], "-test.run=^TestCommandProviderProcessTreeHelper$"})
+		done <- err
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("provider child did not start")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("provider did not finish after its parent exited")
+	}
+	time.Sleep(700 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("provider descendant survived after the parent exited")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+}
+
+func TestRunCommandProviderBoundsChildrenThatHoldStdout(t *testing.T) {
+	started := filepath.Join(t.TempDir(), "started")
+	marker := filepath.Join(t.TempDir(), "survived")
+	t.Setenv(providerHelperModeEnv, "parent")
+	t.Setenv(providerHelperStarted, started)
+	t.Setenv(providerHelperMarker, marker)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := runCommandProvider(ctx, []string{os.Args[0], "-test.run=^TestCommandProviderProcessTreeHelper$"})
+		done <- err
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("provider child did not start")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	startedAt := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runCommandProvider error = %v, want canceled context", err)
+		}
+		if elapsed := time.Since(startedAt); elapsed > 400*time.Millisecond {
+			t.Fatalf("provider waited %s for a child holding stdout", elapsed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider did not stop after cancellation")
+	}
+	time.Sleep(600 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("provider descendant survived cancellation")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
 	}
 }
 

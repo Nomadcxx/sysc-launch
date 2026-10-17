@@ -190,10 +190,13 @@ launcher.CommandProvider(launcher.CommandProviderConfig{
 })
 ```
 
-Each command has a two-second timeout. The helper caps stdout at 256 KiB, rows
-at 4 KiB, and results at 200. It returns a visible error result for process
-failures or malformed output. `OnSelect` receives the original query and the
-selected full line; omit it only when activation should report an error.
+Each command has a two-second deadline. The helper runs it in a process group
+and kills that group on cancellation. After the main process exits, it waits up
+to 150 ms for open pipes, then kills any remaining group processes. It caps
+stdout at 256 KiB, rows at 4 KiB, and results at 200. It returns a visible error
+result for process failures or malformed output. `OnSelect` receives the query
+with the provider prefix removed and the selected full line; omit it only when
+activation should report an error.
 
 ## Discovery and ranking
 
