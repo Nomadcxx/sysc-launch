@@ -27,15 +27,11 @@ func resolveTerminal(getenv getenvFunc, lookPath lookPathFunc) ([]string, error)
 		lookPath = exec.LookPath
 	}
 	if configured := strings.TrimSpace(getenv("TERMINAL")); configured != "" {
-		words, err := shellwords.Parse(configured)
-		if err != nil || len(words) == 0 {
-			return nil, ErrNoTerminal
+		if words, err := shellwords.Parse(configured); err == nil && len(words) > 0 {
+			if path, err := lookPath(words[0]); err == nil {
+				return append([]string{path}, words[1:]...), nil
+			}
 		}
-		path, err := lookPath(words[0])
-		if err != nil {
-			return nil, ErrNoTerminal
-		}
-		return append([]string{path}, words[1:]...), nil
 	}
 	for _, candidate := range terminalCandidates {
 		if path, err := lookPath(candidate); err == nil {
