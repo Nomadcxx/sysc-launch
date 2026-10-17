@@ -110,8 +110,8 @@ func TestActivateRecordsUsageOnSuccessOnly(t *testing.T) {
 	if err := svc.Activate("firefox.desktop", ""); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
-	if got := h.boost("fire", "firefox.desktop"); got != 10 {
-		t.Fatalf("successful activation boost = %d, want 10", got)
+	if got := h.boost("fire", "firefox.desktop"); got != 8 {
+		t.Fatalf("successful activation boost = %d, want 8", got)
 	}
 }
 
