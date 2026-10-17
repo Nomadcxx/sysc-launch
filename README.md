@@ -10,6 +10,9 @@ The module discovers desktop applications, ranks queries, and activates entries
 through Niri. It does not provide a standalone Wayland UI or daemon; sysc-shell
 owns the launcher panel and all presentation.
 
+<details>
+<summary>Launcher screenshots</summary>
+
 <table align="center">
   <tr>
     <td align="center" valign="top"><img src="assets/launcher.webp" alt="The sysc-shell launcher filtering applications for &quot;te&quot;" width="320" loading="lazy"><br><sub>Ranked search</sub></td>
@@ -17,6 +20,8 @@ owns the launcher panel and all presentation.
   </tr>
 </table>
 <p align="center"><sub>The sysc-shell launcher, powered by sysc-launch (fixture data).</sub></p>
+
+</details>
 
 [Documentation site](https://nomadcxx.github.io/sysc/docs/components/sysc-launch/) · [Requirements](#requirements) · [CLI](#cli) · [Library](#library) · [Providers](#providers)
 
