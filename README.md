@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/wordmark.png">
-    <img src="assets/wordmark-light.png" alt="sysc-launch" height="64">
-  </picture>
+  <img src="assets/header.webp" alt="sysc-launch" height="64">
 </p>
 
 `sysc-launch` is a Go launcher engine and diagnostic CLI for Niri. It is a
@@ -15,8 +12,8 @@ owns the launcher panel and all presentation.
 
 <table align="center">
   <tr>
-    <td align="center" valign="top"><img src="assets/launcher.webp" alt="The sysc-shell launcher filtering applications for &quot;te&quot;" width="320"><br><sub>Ranked search</sub></td>
-    <td align="center" valign="top"><img src="assets/launcher-browse.webp" alt="The sysc-shell launcher browsing all applications" width="320"><br><sub>Browse</sub></td>
+    <td align="center" valign="top"><img src="assets/launcher.webp" alt="The sysc-shell launcher filtering applications for &quot;te&quot;" width="320" loading="lazy"><br><sub>Ranked search</sub></td>
+    <td align="center" valign="top"><img src="assets/launcher-browse.webp" alt="The sysc-shell launcher browsing all applications" width="320" loading="lazy"><br><sub>Browse</sub></td>
   </tr>
 </table>
 <p align="center"><sub>The sysc-shell launcher, powered by sysc-launch (fixture data).</sub></p>

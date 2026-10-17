@@ -3,6 +3,7 @@ package launcher
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -48,6 +49,89 @@ func TestServicePublishesInitialSnapshot(t *testing.T) {
 	got := recvResults(t, svc)
 	if len(got) != 2 || got[0].Entry.Name != "Alpha" || got[1].Entry.Name != "Zulu" {
 		t.Fatalf("initial results = %+v", got)
+	}
+}
+
+func TestServiceApplicationsReturnsImmutableSnapshot(t *testing.T) {
+	t.Parallel()
+
+	want := Entry{
+		ID: "app.desktop", Name: "App",
+		Keywords: []string{"keyword"}, Categories: []string{"Utility"},
+		Argv: []string{"/usr/bin/app", "--open"}, ExecArgv: []string{"app", "--open"},
+		Actions: []Action{{ID: "new", Name: "New", Argv: []string{"/usr/bin/app", "--new"}, ExecArgv: []string{"app", "--new"}}},
+	}
+	svc := NewService(ServiceConfig{Scan: func() []Entry { return []Entry{want} }})
+	defer svc.Close()
+
+	first, err := svc.Applications()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first[0].ID = "changed.desktop"
+	first[0].Keywords[0] = "changed"
+	first[0].Categories[0] = "changed"
+	first[0].Argv[0] = "changed"
+	first[0].ExecArgv[0] = "changed"
+	first[0].Actions[0].Name = "Changed"
+	first[0].Actions[0].Argv[0] = "changed"
+	first[0].Actions[0].ExecArgv[0] = "changed"
+
+	second, err := svc.Applications()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(second, []Entry{want}) {
+		t.Fatalf("later snapshot = %+v, want %+v", second, []Entry{want})
+	}
+}
+
+func TestServiceApplicationsReturnsClosedError(t *testing.T) {
+	svc := NewService(ServiceConfig{Scan: func() []Entry { return nil }})
+	svc.Close()
+	if _, err := svc.Applications(); err != ErrServiceClosed {
+		t.Fatalf("Applications after Close error = %v, want %v", err, ErrServiceClosed)
+	}
+}
+
+func TestServiceApplicationsWaitsForInitialScan(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseScan := func() { releaseOnce.Do(func() { close(release) }) }
+	svc := NewService(ServiceConfig{Scan: func() []Entry {
+		close(entered)
+		<-release
+		return []Entry{{ID: "app.desktop", Name: "App"}}
+	}})
+	defer svc.Close()
+	defer releaseScan()
+	<-entered
+
+	gotCh := make(chan []Entry, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		got, err := svc.Applications()
+		gotCh <- got
+		errCh <- err
+	}()
+	select {
+	case <-gotCh:
+		t.Fatal("Applications returned before the initial scan completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	releaseScan()
+	select {
+	case got := <-gotCh:
+		if err := <-errCh; err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].ID != "app.desktop" {
+			t.Fatalf("Applications = %+v, want the completed initial scan", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Applications did not return after the initial scan")
 	}
 }
 

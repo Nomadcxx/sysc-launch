@@ -202,6 +202,43 @@ func TestTerminalConfiguredWithArguments(t *testing.T) {
 	}
 }
 
+func TestExpandDesktopEntryMarksOnlySupportedTerminalEmulators(t *testing.T) {
+	t.Parallel()
+
+	lookPath := func(name string) (string, error) {
+		if name == "foot" {
+			return "/usr/bin/foot", nil
+		}
+		return "", errors.New("not found")
+	}
+	tests := []struct {
+		name string
+		raw  *desktopentry.Entry
+		want bool
+	}{
+		{name: "supported emulator", raw: &desktopentry.Entry{Exec: "foot", Categories: []string{"System", "TerminalEmulator"}}, want: true},
+		{name: "foot server mode", raw: &desktopentry.Entry{Exec: "foot --server", Categories: []string{"TerminalEmulator"}}},
+		{name: "foot server mode with path", raw: &desktopentry.Entry{Exec: "foot --server=/run/user/1000/foot.sock", Categories: []string{"TerminalEmulator"}}},
+		{name: "foot short server mode", raw: &desktopentry.Entry{Exec: "foot -s", Categories: []string{"TerminalEmulator"}}},
+		{name: "foot server mode after other options", raw: &desktopentry.Entry{Exec: "foot --login-shell --server", Categories: []string{"TerminalEmulator"}}},
+		{name: "server-like argument after option terminator", raw: &desktopentry.Entry{Exec: "foot -- --server", Categories: []string{"TerminalEmulator"}}, want: true},
+		{name: "not an emulator category", raw: &desktopentry.Entry{Exec: "foot", Categories: []string{"System"}}},
+		{name: "unsupported executable", raw: &desktopentry.Entry{Exec: "editor", Categories: []string{"TerminalEmulator"}}},
+		{name: "already runs in a terminal", raw: &desktopentry.Entry{Exec: "foot", Categories: []string{"TerminalEmulator"}, Terminal: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, err := expandDesktopEntry(tt.raw, func(string) string { return "" }, lookPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if entry.TerminalApp != tt.want {
+				t.Fatalf("TerminalApp = %v, want %v", entry.TerminalApp, tt.want)
+			}
+		})
+	}
+}
+
 func TestScanPreservesActionIDsAndWorkDir(t *testing.T) {
 	t.Parallel()
 

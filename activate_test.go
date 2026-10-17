@@ -87,6 +87,55 @@ func TestActivateActionUsesActionArgv(t *testing.T) {
 	}
 }
 
+func TestActivateUsesDefaultTerminalChangedByConfigReload(t *testing.T) {
+	selectedTerminal := ""
+	runner := &recordRunner{}
+	svc := NewService(ServiceConfig{
+		Scan: func() []Entry {
+			return []Entry{
+				{ID: "foot", Name: "Foot", Argv: []string{"foot", "--server"}, TerminalApp: true},
+				{ID: "editor", Name: "Editor", Terminal: true,
+					Argv: []string{"/usr/bin/system-terminal", "-e", "editor"}, ExecArgv: []string{"editor"},
+					Actions: []Action{{ID: "new", Name: "New", Argv: []string{"/usr/bin/system-terminal", "-e", "editor", "--new"}, ExecArgv: []string{"editor", "--new"}}}},
+			}
+		},
+		TerminalDesktopID: func() string { return selectedTerminal },
+		LookPath: func(name string) (string, error) {
+			if name == "foot" {
+				return "/usr/bin/foot", nil
+			}
+			return "", errors.New("not found")
+		},
+		Run: runner.run,
+	})
+	defer svc.Close()
+	recvResults(t, svc)
+
+	selectedTerminal = "foot" // the shell's config reload published the chosen desktop ID
+	if err := svc.Activate("editor", ""); err != nil {
+		t.Fatalf("Activate after config reload: %v", err)
+	}
+	want := []string{"niri", "msg", "action", "spawn", "--", "/usr/bin/foot", "--server", "-e", "editor"}
+	if got := runner.lastArgv(); !slices.Equal(got, want) {
+		t.Fatalf("spawn argv = %v, want %v", got, want)
+	}
+	if err := svc.Activate("editor", "new"); err != nil {
+		t.Fatalf("Activate after config reload: %v", err)
+	}
+	want = []string{"niri", "msg", "action", "spawn", "--", "/usr/bin/foot", "--server", "-e", "editor", "--new"}
+	if got := runner.lastArgv(); !slices.Equal(got, want) {
+		t.Fatalf("spawn argv = %v, want %v", got, want)
+	}
+	selectedTerminal = "stale.desktop"
+	if err := svc.Activate("editor", ""); err != nil {
+		t.Fatalf("Activate with stale default: %v", err)
+	}
+	want = []string{"niri", "msg", "action", "spawn", "--", "/usr/bin/system-terminal", "-e", "editor"}
+	if got := runner.lastArgv(); !slices.Equal(got, want) {
+		t.Fatalf("stale default spawn argv = %v, want fallback %v", got, want)
+	}
+}
+
 func TestActivateRecordsUsageOnSuccessOnly(t *testing.T) {
 	t.Parallel()
 
@@ -110,8 +159,8 @@ func TestActivateRecordsUsageOnSuccessOnly(t *testing.T) {
 	if err := svc.Activate("firefox.desktop", ""); err != nil {
 		t.Fatalf("Activate: %v", err)
 	}
-	if got := h.boost("fire", "firefox.desktop"); got != 10 {
-		t.Fatalf("successful activation boost = %d, want 10", got)
+	if got := h.boost("fire", "firefox.desktop"); got != 8 {
+		t.Fatalf("successful activation boost = %d, want 8", got)
 	}
 }
 

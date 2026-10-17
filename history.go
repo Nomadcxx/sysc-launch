@@ -3,6 +3,7 @@ package launcher
 import (
 	"bytes"
 	"encoding/gob"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,7 @@ import (
 // the score is deterministic.
 
 const (
-	historyAmountCap = 10
+	historyDecayDays = 30
 	usageBoostCap    = 25
 )
 
@@ -98,31 +99,48 @@ func (h *History) record(query, identifier string) {
 		h.data[query] = queries
 	}
 	usage := queries[identifier]
+	if usage.Amount < 0 {
+		usage.Amount = 0
+	}
+	maxInt := int(^uint(0) >> 1)
+	if usage.Amount < maxInt {
+		usage.Amount++
+	}
 	usage.LastUsed = h.now()
-	usage.Amount = min(usage.Amount+1, historyAmountCap)
 	queries[identifier] = usage
 
 	h.saveLocked()
 }
 
-// boost returns the raw usage score for identifier under query. Callers cap
-// it (usageBoostCap) when adding it to the D4 textual score.
+// boost returns a bounded usage score for identifier under query. The score
+// fades to zero after historyDecayDays while count gains diminish as history grows.
 func (h *History) boost(query, identifier string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	amount, lastUsed, delta := h.usageLocked(query, identifier)
-	if amount == 0 {
+	if amount <= 0 {
 		return 0
 	}
-	base := 10 - int(h.now().Sub(lastUsed).Hours()/24)
-	return max(base*amount, 1) / max(delta, 1)
+	age := h.now().Sub(lastUsed)
+	if age < 0 {
+		age = 0
+	}
+	if age >= time.Duration(historyDecayDays)*24*time.Hour {
+		return 0
+	}
+	ageDays := int(age / (24 * time.Hour))
+	countScore := float64(amount) / (float64(amount) + 2)
+	recency := float64(historyDecayDays-ageDays) / historyDecayDays
+	score := float64(usageBoostCap) * countScore * recency / float64(max(delta, 1))
+	return int(math.Round(score))
 }
 
 // usageLocked aggregates Amount and the most recent LastUsed across every
 // stored query prefix-related to query (all of them when query is empty),
 // returning the smallest contributing prefix-length delta.
 func (h *History) usageLocked(query, identifier string) (amount int, lastUsed time.Time, delta int) {
+	deltaFound := false
 	for stored, queries := range h.data {
 		if query != "" && !strings.HasPrefix(query, stored) && !strings.HasPrefix(stored, query) {
 			continue
@@ -131,7 +149,14 @@ func (h *History) usageLocked(query, identifier string) (amount int, lastUsed ti
 		if !ok {
 			continue
 		}
-		amount += usage.Amount
+		if usage.Amount > 0 {
+			maxInt := int(^uint(0) >> 1)
+			if amount > maxInt-usage.Amount {
+				amount = maxInt
+			} else {
+				amount += usage.Amount
+			}
+		}
 		if usage.LastUsed.After(lastUsed) {
 			lastUsed = usage.LastUsed
 		}
@@ -140,8 +165,9 @@ func (h *History) usageLocked(query, identifier string) (amount int, lastUsed ti
 			if d < 0 {
 				d = -d
 			}
-			if delta == 0 || d < delta {
+			if !deltaFound || d < delta {
 				delta = d
+				deltaFound = true
 			}
 		}
 	}
