@@ -3,6 +3,7 @@ package launcher
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestScoreMatchesEveryApprovedField(t *testing.T) {
@@ -96,6 +97,29 @@ func TestScoreRanksCategoriesBelowName(t *testing.T) {
 	}
 	if got[0].Entry.Name != "Graphics Editor" || got[1].Entry.Name != "Gimp" {
 		t.Fatalf("order = %+v", got)
+	}
+}
+
+func TestRankKeepsMateriallyBetterTextAboveUsage(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.October, 17, 12, 0, 0, 0, time.UTC)
+	entries := []Entry{
+		{ID: "fox.desktop", Name: "Fox"},
+		{ID: "firefox.desktop", Name: "Firefox"},
+	}
+	base := rank(entries, "fox", nil)
+	if len(base) != 2 || base[0].Entry.ID != "fox.desktop" {
+		t.Fatalf("base text order = %+v, want exact Fox first", base)
+	}
+	if gap := base[0].Score - base[1].Score; gap <= usageBoostCap {
+		t.Fatalf("fixture text score gap = %d, want more than usage cap %d", gap, usageBoostCap)
+	}
+
+	history := historyWithUsage(now, "fox", "firefox.desktop", 10, now)
+	got := rank(entries, "fox", history.boost)
+	if got[0].Entry.ID != "fox.desktop" {
+		t.Fatalf("usage-adjusted order = %+v, materially better text match must remain first", got)
 	}
 }
 
