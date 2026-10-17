@@ -174,6 +174,30 @@ launcher.Provider{
 - Provider functions run on the service goroutine and block queries and
   activation while they run. They must not call back into the `Service`.
 
+`CommandProvider` runs a configured argv command for each query and parses
+stdout as one result per line. A line contains `label` or `label<TAB>comment`.
+The helper replaces `{query}` inside argv tokens and never evaluates a shell
+command:
+
+```go
+launcher.CommandProvider(launcher.CommandProviderConfig{
+	Name:    "Bookmarks",
+	Prefix:  "/bookmarks",
+	Command: []string{"bookmark-search", "--query={query}"},
+	OnSelect: func(query, selection string) error {
+		return activateBookmark(selection)
+	},
+})
+```
+
+Each command has a two-second deadline. The helper runs it in a process group
+and kills that group on cancellation. After the main process exits, it waits up
+to 150 ms for open pipes, then kills any remaining group processes. It caps
+stdout at 256 KiB, rows at 4 KiB, and results at 200. It returns a visible error
+result for process failures or malformed output. `OnSelect` receives the query
+with the provider prefix removed and the selected full line; omit it only when
+activation should report an error.
+
 ## Discovery and ranking
 
 The scanner reads `.desktop` files from `$XDG_DATA_HOME/applications` and each

@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -114,6 +115,46 @@ func TestServiceNewerQuerySupersedesInflight(t *testing.T) {
 	select {
 	case stale := <-svc.Results():
 		t.Fatalf("superseded query published %+v", stale)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestServiceNewerQuerySupersedesInflightCommandProvider(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	provider := newCommandProvider(CommandProviderConfig{
+		Name: "Dynamic", Prefix: "/dynamic", Command: []string{"listing", "{query}"},
+	}, func(ctx context.Context, argv []string) ([]byte, error) {
+		if argv[1] == "slow" {
+			close(started)
+			select {
+			case <-release:
+				return []byte("stale row\n"), nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return []byte(argv[1] + " row\n"), nil
+	}, time.Second)
+	svc := NewService(ServiceConfig{
+		Scan:      func() []Entry { return nil },
+		Providers: []Provider{provider},
+	})
+	defer svc.Close()
+	recvResults(t, svc)
+
+	svc.Query("/dynamic slow")
+	<-started
+	svc.Query("/dynamic fast")
+	close(release)
+
+	got := recvResults(t, svc)
+	if len(got) != 1 || got[0].Entry.Name != "fast row" {
+		t.Fatalf("results = %+v, want only the newer query's row", got)
+	}
+	select {
+	case stale := <-svc.Results():
+		t.Fatalf("superseded command query published %+v", stale)
 	case <-time.After(100 * time.Millisecond):
 	}
 }
