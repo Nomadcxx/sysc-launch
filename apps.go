@@ -233,6 +233,7 @@ func expandDesktopEntry(raw *desktopentry.Entry, getenv getenvFunc, lookPath loo
 		IconName:    raw.Icon,
 		WorkDir:     workDir,
 		Terminal:    raw.Terminal,
+		TerminalApp: isTerminalEmulator(raw.Terminal, raw.Categories, execArgv, lookPath),
 	}
 	for i, action := range raw.Actions {
 		copy := *raw
@@ -245,6 +246,7 @@ func expandDesktopEntry(raw *desktopentry.Entry, getenv getenvFunc, lookPath loo
 		if actionErr != nil || len(actionArgv) == 0 {
 			continue
 		}
+		execActionArgv := actionArgv
 		if len(terminal) > 0 {
 			actionArgv = terminalArgv(terminal, actionArgv)
 		}
@@ -253,7 +255,7 @@ func expandDesktopEntry(raw *desktopentry.Entry, getenv getenvFunc, lookPath loo
 			id = actionIDs[i]
 		}
 		entry.Actions = append(entry.Actions, Action{
-			ID: id, Name: action.Name, IconName: action.Icon, Argv: actionArgv,
+			ID: id, Name: action.Name, IconName: action.Icon, Argv: actionArgv, ExecArgv: execActionArgv,
 		})
 	}
 	return entry, nil

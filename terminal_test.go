@@ -99,6 +99,38 @@ func TestTerminalFallsBackInPolicyOrder(t *testing.T) {
 	}
 }
 
+func TestTerminalFallsBackWhenConfiguredTerminalIsMissing(t *testing.T) {
+	t.Parallel()
+
+	var tried []string
+	entry, err := expandDesktopEntry(
+		&desktopentry.Entry{Exec: "editor", Terminal: true},
+		func(key string) string {
+			if key == "TERMINAL" {
+				return "missing-terminal --single-instance"
+			}
+			return ""
+		},
+		func(name string) (string, error) {
+			tried = append(tried, name)
+			if name == "foot" {
+				return "/usr/bin/foot", nil
+			}
+			return "", errors.New("not found")
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(tried, []string{"missing-terminal", "kitty", "foot"}) {
+		t.Fatalf("tried=%q, want configured terminal then candidates in policy order", tried)
+	}
+	want := []string{"/usr/bin/foot", "-e", "editor"}
+	if !slices.Equal(entry.Argv, want) {
+		t.Fatalf("argv = %q, want %q", entry.Argv, want)
+	}
+}
+
 func TestTerminalMissingExcludesEntryAtScanTime(t *testing.T) {
 	t.Parallel()
 

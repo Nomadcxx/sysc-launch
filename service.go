@@ -44,6 +44,10 @@ type ServiceConfig struct {
 	// ApplicationsGlyph is the Applications row's overview glyph; empty
 	// uses PlaceholderGlyph.
 	ApplicationsGlyph string
+	// TerminalDesktopID returns the current stable desktop ID of the selected
+	// terminal app. It is read for each activation so a config reload takes
+	// effect without replacing the service.
+	TerminalDesktopID func() string
 }
 
 var ErrServiceClosed = errors.New("launcher: service closed")
@@ -64,14 +68,16 @@ type activateRequest struct {
 type Service struct {
 	cfg ServiceConfig
 
-	gen        atomic.Uint64
-	queryCh    chan queryRequest
-	activateCh chan activateRequest
-	openCh     chan struct{}
-	snapCh     chan []Entry
-	results    chan []Result
-	done       chan struct{}
-	wg         sync.WaitGroup
+	gen            atomic.Uint64
+	queryCh        chan queryRequest
+	activateCh     chan activateRequest
+	applicationsCh chan chan []Entry
+	openCh         chan struct{}
+	snapCh         chan []Entry
+	results        chan []Result
+	ready          chan struct{}
+	done           chan struct{}
+	wg             sync.WaitGroup
 }
 
 func NewService(cfg ServiceConfig) *Service {
@@ -99,13 +105,15 @@ func NewService(cfg ServiceConfig) *Service {
 	}
 
 	s := &Service{
-		cfg:        cfg,
-		queryCh:    make(chan queryRequest, 1),
-		activateCh: make(chan activateRequest),
-		openCh:     make(chan struct{}, 1),
-		snapCh:     make(chan []Entry),
-		results:    make(chan []Result, 1),
-		done:       make(chan struct{}),
+		cfg:            cfg,
+		queryCh:        make(chan queryRequest, 1),
+		activateCh:     make(chan activateRequest),
+		applicationsCh: make(chan chan []Entry),
+		openCh:         make(chan struct{}, 1),
+		snapCh:         make(chan []Entry),
+		results:        make(chan []Result, 1),
+		ready:          make(chan struct{}),
+		done:           make(chan struct{}),
 	}
 	s.wg.Add(2)
 	go s.collect()
@@ -145,6 +153,29 @@ func (s *Service) Query(text string) {
 // Results publishes ranked results as immutable slices, latest wins.
 func (s *Service) Results() <-chan []Result {
 	return s.results
+}
+
+// Applications waits for the initial scan and returns a detached copy of the
+// latest installed-application snapshot. Closing or changing the returned
+// entries cannot affect the launcher's state.
+func (s *Service) Applications() ([]Entry, error) {
+	select {
+	case <-s.ready:
+	case <-s.done:
+		return nil, ErrServiceClosed
+	}
+	reply := make(chan []Entry, 1)
+	select {
+	case s.applicationsCh <- reply:
+	case <-s.done:
+		return nil, ErrServiceClosed
+	}
+	select {
+	case entries := <-reply:
+		return entries, nil
+	case <-s.done:
+		return nil, ErrServiceClosed
+	}
 }
 
 // Activate runs a row of the last published result set on the service
@@ -217,6 +248,7 @@ func (s *Service) work() {
 	defer s.wg.Done()
 
 	var entries []Entry
+	ready := false
 	var lastQuery string
 	var lastGen uint64
 
@@ -277,6 +309,10 @@ func (s *Service) work() {
 			return
 		case snap := <-s.snapCh:
 			entries = snap
+			if !ready {
+				close(s.ready)
+				ready = true
+			}
 			// Republish the current query against the new snapshot unless a
 			// newer query is already queued.
 			if len(s.queryCh) == 0 && s.gen.Load() == lastGen {
@@ -284,6 +320,8 @@ func (s *Service) work() {
 				out, owners = run(lastQuery)
 				s.publishResults(out)
 			}
+		case reply := <-s.applicationsCh:
+			reply <- cloneEntries(entries)
 		case req := <-s.queryCh:
 			lastQuery, lastGen = req.text, req.gen
 			out, own := run(req.text)
@@ -313,6 +351,11 @@ func (s *Service) activate(entries []Entry, query, id, action string) error {
 	var argv []string
 	var workDir string
 	found := false
+	terminalID := ""
+	if s.cfg.TerminalDesktopID != nil {
+		terminalID = s.cfg.TerminalDesktopID()
+	}
+	terminal := resolveTerminalEntry(entries, terminalID, s.cfg.LookPath)
 	for _, entry := range entries {
 		if entry.ID != id {
 			continue
@@ -320,11 +363,17 @@ func (s *Service) activate(entries []Entry, query, id, action string) error {
 		argv = entry.Argv
 		workDir = entry.WorkDir
 		found = true
+		if entry.Terminal && len(terminal) > 0 {
+			argv = terminalArgv(terminal, entry.ExecArgv)
+		}
 		if action != "" {
 			argv, found = nil, false
 			for _, a := range entry.Actions {
 				if a.ID == action {
 					argv, found = a.Argv, true
+					if entry.Terminal && len(terminal) > 0 {
+						argv = terminalArgv(terminal, a.ExecArgv)
+					}
 					break
 				}
 			}
