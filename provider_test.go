@@ -58,6 +58,146 @@ func newProviderService(t *testing.T, activated *[]string, mu *sync.Mutex, spawn
 	return svc
 }
 
+func TestCommandProviderPassesQueryAsArgvDataAndParsesRows(t *testing.T) {
+	var gotArgv []string
+	provider := newCommandProvider(CommandProviderConfig{
+		Name: "Files", Prefix: "/files", Glyph: "glyph:description",
+		Command: []string{"listing", "--query={query}"},
+	}, func(_ context.Context, argv []string) ([]byte, error) {
+		gotArgv = append([]string(nil), argv...)
+		return []byte("milk; rm -rf\tA note\nother\tSecond row\n"), nil
+	}, time.Second)
+
+	query := "milk; rm -rf"
+	got := provider.Query(query)
+	if strings.Join(gotArgv, "\x00") != strings.Join([]string{"listing", "--query=" + query}, "\x00") {
+		t.Fatalf("command argv = %q, query was not passed as data", gotArgv)
+	}
+	if len(got) != 1 || got[0].Entry.ID != "/files:row:milk; rm -rf\tA note" || got[0].Entry.Name != query || got[0].Entry.Comment != "A note" {
+		t.Fatalf("parsed results = %+v", got)
+	}
+}
+
+func TestCommandProviderEmptyOutputReturnsEmptyRows(t *testing.T) {
+	provider := newCommandProvider(CommandProviderConfig{
+		Name: "Files", Prefix: "/files", Command: []string{"listing"},
+	}, func(context.Context, []string) ([]byte, error) {
+		return nil, nil
+	}, time.Second)
+
+	got := provider.Query("")
+	if got == nil || len(got) != 0 {
+		t.Fatalf("empty command output = %+v, want a non-nil empty result slice", got)
+	}
+}
+
+func TestCommandProviderMalformedOutputIsVisible(t *testing.T) {
+	provider := newCommandProvider(CommandProviderConfig{
+		Name: "Files", Prefix: "/files", Command: []string{"listing"},
+	}, func(context.Context, []string) ([]byte, error) {
+		return []byte{0xff, '\n'}, nil
+	}, time.Second)
+
+	got := provider.Query("")
+	if len(got) != 1 || got[0].Entry.ID != "/files:error" || !strings.Contains(got[0].Entry.Comment, "UTF-8") {
+		t.Fatalf("malformed output result = %+v", got)
+	}
+}
+
+func TestCommandProviderProcessFailureIsVisible(t *testing.T) {
+	provider := newCommandProvider(CommandProviderConfig{
+		Name: "Files", Prefix: "/files", Command: []string{"listing"},
+	}, func(context.Context, []string) ([]byte, error) {
+		return nil, errors.New("exit status 7")
+	}, time.Second)
+
+	got := provider.Query("")
+	if len(got) != 1 || got[0].Entry.ID != "/files:error" || !strings.Contains(got[0].Entry.Comment, "exit status 7") {
+		t.Fatalf("failed command result = %+v", got)
+	}
+}
+
+func TestCommandProviderTimesOutAndCancelsRunner(t *testing.T) {
+	provider := newCommandProvider(CommandProviderConfig{
+		Name: "Files", Prefix: "/files", Command: []string{"listing"},
+	}, func(ctx context.Context, _ []string) ([]byte, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}, 10*time.Millisecond)
+
+	got := provider.Query("")
+	if len(got) != 1 || !strings.Contains(got[0].Entry.Comment, "deadline exceeded") {
+		t.Fatalf("timed out command result = %+v", got)
+	}
+}
+
+func TestCommandProviderCapsOutputAndResultCount(t *testing.T) {
+	t.Run("output bytes", func(t *testing.T) {
+		provider := newCommandProvider(CommandProviderConfig{
+			Name: "Files", Prefix: "/files", Command: []string{"listing"},
+		}, func(context.Context, []string) ([]byte, error) {
+			return []byte(strings.Repeat("x", 256*1024+1)), nil
+		}, time.Second)
+
+		got := provider.Query("")
+		if len(got) != 1 || !strings.Contains(got[0].Entry.Comment, "output limit") {
+			t.Fatalf("oversized output result = %+v", got)
+		}
+	})
+
+	t.Run("result count", func(t *testing.T) {
+		output := strings.Repeat("row\n", 201)
+		provider := newCommandProvider(CommandProviderConfig{
+			Name: "Files", Prefix: "/files", Command: []string{"listing"},
+		}, func(context.Context, []string) ([]byte, error) {
+			return []byte(output), nil
+		}, time.Second)
+
+		got := provider.Query("")
+		if len(got) != 200 {
+			t.Fatalf("result count = %d, want 200", len(got))
+		}
+	})
+}
+
+func TestCommandProviderReportsMalformedRowsAfterResultLimit(t *testing.T) {
+	output := strings.Repeat("row\n", 200) + "\tmissing label\n"
+	provider := newCommandProvider(CommandProviderConfig{
+		Name: "Files", Prefix: "/files", Command: []string{"listing"},
+	}, func(context.Context, []string) ([]byte, error) {
+		return []byte(output), nil
+	}, time.Second)
+
+	got := provider.Query("")
+	if len(got) != 1 || got[0].Entry.ID != "/files:error" || !strings.Contains(got[0].Entry.Comment, "empty label") {
+		t.Fatalf("malformed row after result limit = %+v", got)
+	}
+}
+
+func TestCommandProviderActivationReceivesOriginalSelection(t *testing.T) {
+	var gotQuery, gotSelection string
+	provider := newCommandProvider(CommandProviderConfig{
+		Name: "Files", Prefix: "/files", Command: []string{"listing"},
+		OnSelect: func(query, selection string) error {
+			gotQuery, gotSelection = query, selection
+			return nil
+		},
+	}, func(context.Context, []string) ([]byte, error) {
+		return []byte("a\tFirst row\n"), nil
+	}, time.Second)
+
+	rows := provider.Query("a")
+	if len(rows) != 1 {
+		t.Fatalf("query rows = %+v", rows)
+	}
+	if err := provider.Activate("a", rows[0].Entry.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if gotQuery != "a" || gotSelection != "a\tFirst row" {
+		t.Fatalf("activation got query %q selection %q", gotQuery, gotSelection)
+	}
+}
+
 func TestOverviewListsValidProvidersInOrder(t *testing.T) {
 	var mu sync.Mutex
 	var activated []string
