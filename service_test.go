@@ -91,6 +91,9 @@ func TestServiceApplicationsReturnsClosedError(t *testing.T) {
 	if _, err := svc.Applications(); err != ErrServiceClosed {
 		t.Fatalf("Applications after Close error = %v, want %v", err, ErrServiceClosed)
 	}
+	if _, err := svc.RefreshApplications(); err != ErrServiceClosed {
+		t.Fatalf("RefreshApplications after Close error = %v, want %v", err, ErrServiceClosed)
+	}
 }
 
 func TestServiceApplicationsWaitsForInitialScan(t *testing.T) {
@@ -131,6 +134,88 @@ func TestServiceApplicationsWaitsForInitialScan(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Applications did not return after the initial scan")
+	}
+}
+
+func TestServiceRefreshApplicationsReturnsPublishedRescan(t *testing.T) {
+	t.Parallel()
+
+	clock := &atomicClock{}
+	var scans atomic.Int32
+	svc := NewService(ServiceConfig{Scan: func() []Entry {
+		if scans.Add(1) == 1 {
+			return []Entry{{ID: "old.desktop", Name: "Old"}}
+		}
+		return []Entry{{ID: "new.desktop", Name: "New", Keywords: []string{"fresh"}}}
+	}, Now: clock.now, StaleAfter: time.Second})
+	defer svc.Close()
+
+	recvResults(t, svc)
+	fresh, err := svc.RefreshApplications()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fresh) != 1 || fresh[0].ID != "old.desktop" || scans.Load() != 1 {
+		t.Fatalf("fresh applications = %+v with %d scans, want the initial snapshot and one scan", fresh, scans.Load())
+	}
+
+	clock.advance(2 * time.Second)
+	got, err := svc.RefreshApplications()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "new.desktop" {
+		t.Fatalf("refreshed applications = %+v, want the rescan result", got)
+	}
+	got[0].Keywords[0] = "mutated"
+
+	latest, err := svc.Applications()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(latest) != 1 || latest[0].ID != "new.desktop" || latest[0].Keywords[0] != "fresh" {
+		t.Fatalf("published snapshot = %+v, want an unmodified refresh result", latest)
+	}
+}
+
+func TestServiceRefreshApplicationsUsesInitialScanWhenItIsInFlight(t *testing.T) {
+	scanStarted := make(chan struct{})
+	releaseScan := make(chan struct{})
+	var releaseOnce sync.Once
+	var startedOnce sync.Once
+	var scans atomic.Int32
+	svc := NewService(ServiceConfig{Scan: func() []Entry {
+		if scans.Add(1) == 1 {
+			startedOnce.Do(func() { close(scanStarted) })
+			<-releaseScan
+		}
+		return []Entry{{ID: "app.desktop", Name: "App"}}
+	}})
+	defer svc.Close()
+	defer releaseOnce.Do(func() { close(releaseScan) })
+	<-scanStarted
+
+	gotCh := make(chan []Entry, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		got, err := svc.RefreshApplications()
+		gotCh <- got
+		errCh <- err
+	}()
+	releaseOnce.Do(func() { close(releaseScan) })
+	select {
+	case got := <-gotCh:
+		if err := <-errCh; err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].ID != "app.desktop" {
+			t.Fatalf("applications = %+v, want initial scan", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RefreshApplications did not return the initial scan")
+	}
+	if scans.Load() != 1 {
+		t.Fatalf("scan count = %d, want one initial scan", scans.Load())
 	}
 }
 

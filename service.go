@@ -62,6 +62,11 @@ type activateRequest struct {
 	reply      chan error
 }
 
+type snapshotUpdate struct {
+	entries []Entry
+	reply   chan []Entry
+}
+
 // Service owns the collector and query goroutines (D12). All state crosses
 // goroutine boundaries as immutable snapshots through channels; no Wayland
 // types appear in this package.
@@ -72,8 +77,9 @@ type Service struct {
 	queryCh        chan queryRequest
 	activateCh     chan activateRequest
 	applicationsCh chan chan []Entry
+	refreshCh      chan chan []Entry
 	openCh         chan struct{}
-	snapCh         chan []Entry
+	snapCh         chan snapshotUpdate
 	results        chan []Result
 	ready          chan struct{}
 	done           chan struct{}
@@ -109,8 +115,9 @@ func NewService(cfg ServiceConfig) *Service {
 		queryCh:        make(chan queryRequest, 1),
 		activateCh:     make(chan activateRequest),
 		applicationsCh: make(chan chan []Entry),
+		refreshCh:      make(chan chan []Entry),
 		openCh:         make(chan struct{}, 1),
-		snapCh:         make(chan []Entry),
+		snapCh:         make(chan snapshotUpdate),
 		results:        make(chan []Result, 1),
 		ready:          make(chan struct{}),
 		done:           make(chan struct{}),
@@ -178,6 +185,23 @@ func (s *Service) Applications() ([]Entry, error) {
 	}
 }
 
+// RefreshApplications rescans installed applications when the current scan is
+// stale and returns a detached copy after the current snapshot is published.
+func (s *Service) RefreshApplications() ([]Entry, error) {
+	reply := make(chan []Entry, 1)
+	select {
+	case s.refreshCh <- reply:
+	case <-s.done:
+		return nil, ErrServiceClosed
+	}
+	select {
+	case entries := <-reply:
+		return entries, nil
+	case <-s.done:
+		return nil, ErrServiceClosed
+	}
+}
+
 // Activate runs a row of the last published result set on the service
 // goroutine. A row whose provider has an Activate function goes to it;
 // anything else spawns the entry (or one of its desktop actions) through
@@ -212,7 +236,7 @@ func (s *Service) collect() {
 	// Anchor staleness before the scan starts: once Scan is running, observers
 	// already order after this timestamp.
 	scannedAt := s.cfg.Now()
-	if !s.publishSnapshot() {
+	if !s.publishSnapshot(nil) {
 		return
 	}
 	for {
@@ -224,17 +248,30 @@ func (s *Service) collect() {
 				continue
 			}
 			scannedAt = s.cfg.Now()
-			if !s.publishSnapshot() {
+			if !s.publishSnapshot(nil) {
+				return
+			}
+		case reply := <-s.refreshCh:
+			if s.cfg.Now().Sub(scannedAt) <= s.cfg.StaleAfter {
+				select {
+				case s.applicationsCh <- reply:
+				case <-s.done:
+					return
+				}
+				continue
+			}
+			scannedAt = s.cfg.Now()
+			if !s.publishSnapshot(reply) {
 				return
 			}
 		}
 	}
 }
 
-func (s *Service) publishSnapshot() bool {
+func (s *Service) publishSnapshot(reply chan []Entry) bool {
 	entries := s.cfg.Scan()
 	select {
-	case s.snapCh <- entries:
+	case s.snapCh <- snapshotUpdate{entries: entries, reply: reply}:
 		return true
 	case <-s.done:
 		return false
@@ -308,10 +345,13 @@ func (s *Service) work() {
 		case <-s.done:
 			return
 		case snap := <-s.snapCh:
-			entries = snap
+			entries = snap.entries
 			if !ready {
 				close(s.ready)
 				ready = true
+			}
+			if snap.reply != nil {
+				snap.reply <- cloneEntries(entries)
 			}
 			// Republish the current query against the new snapshot unless a
 			// newer query is already queued.
