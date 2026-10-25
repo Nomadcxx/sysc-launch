@@ -11,23 +11,51 @@ import (
 	"time"
 )
 
-// Ported from Elephant's pkg/common/history (GPL-3) with the owner's blessing;
-// importing it would drag xdg/fastwalk/fsnotify/toml into the shell. One
-// deliberate deviation: Elephant takes the prefix-length delta of an arbitrary
-// map-iteration key; this port divides by the smallest contributing delta so
-// the score is deterministic.
+// A launch is remembered against the query that selected it, so the launcher
+// can put an entry the user picked before back at the top when the same query
+// is typed again. Two effects shape the result:
+//
+//   - Frequency saturates. The factor uses/(uses+usageSaturation) climbs quickly
+//     over the first few launches and then flattens, so the hundredth launch
+//     counts for far less than the second.
+//   - Recency decays linearly to nothing at historyDecayDays, after which a
+//     remembered launch carries no weight at all.
+//
+// Remembered queries are matched by prefix in either direction, so typing
+// "fire" benefits from a remembered "firefox" and the reverse, diluted by how
+// far apart the two queries are in length.
+//
+// For one identifier the contribution is
+//
+//	round(usageBoostCap * uses/(uses+usageSaturation)
+//	      * (historyDecayDays-ageDays)/historyDecayDays / max(distance, 1))
+//
+// where uses is the total launch count, ageDays is whole days since the most
+// recent launch, and distance is the smallest length gap to a remembered query.
 
 const (
+	// historyDecayDays is the age at which a remembered launch stops scoring.
 	historyDecayDays = 30
-	usageBoostCap    = 25
+	// usageBoostCap bounds what remembered launches may add to a rank score.
+	usageBoostCap = 25
+	// usageSaturation softens the gain from repeat launches. It is added to the
+	// use count before the ratio is taken, so one launch scores a third of the
+	// cap and further launches converge towards it.
+	usageSaturation = 2
+	// usageDay is the unit a remembered launch ages in.
+	usageDay = 24 * time.Hour
 )
 
+// historyData is one identifier's remembered launches under one query. The
+// field names are the on-disk shape of the history file, so renaming them would
+// silently discard existing history; change them only alongside a migration.
 type historyData struct {
 	LastUsed time.Time
 	Amount   int
 }
 
-// History stores launcher usage for ranking and persists successful activations.
+// History remembers which entries were launched for which queries and keeps
+// them across runs.
 type History struct {
 	mu   sync.Mutex
 	path string
@@ -73,122 +101,168 @@ func loadHistory(path string, now func() time.Time, logf func(string, ...any)) *
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		if !os.IsNotExist(err) && logf != nil {
-			logf("launcher: load history: %v", err)
+		if !os.IsNotExist(err) {
+			h.report("launcher: load history: %v", err)
 		}
 		return h
 	}
 	if err := gob.NewDecoder(bytes.NewReader(raw)).Decode(&h.data); err != nil {
-		if logf != nil {
-			logf("launcher: decode history: %v", err)
-		}
+		h.report("launcher: decode history: %v", err)
 		h.data = make(map[string]map[string]historyData)
 	}
 	return h
 }
 
-// record persists one successful activation of identifier under query.
-// Callers invoke it only after the spawn succeeds (D6).
+// record remembers one successful launch of identifier under query and writes
+// the history back to disk. Callers invoke it only once the launch succeeded.
 func (h *History) record(query, identifier string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	queries := h.data[query]
-	if queries == nil {
-		queries = make(map[string]historyData)
-		h.data[query] = queries
+	byIdentifier := h.data[query]
+	if byIdentifier == nil {
+		byIdentifier = make(map[string]historyData)
+		h.data[query] = byIdentifier
 	}
-	usage := queries[identifier]
-	if usage.Amount < 0 {
-		usage.Amount = 0
+	entry := byIdentifier[identifier]
+	// A negative count can only come from a file written by an older or
+	// damaged version of this code; start it at zero rather than letting it
+	// pull the tally down.
+	if entry.Amount < 0 {
+		entry.Amount = 0
 	}
-	maxInt := int(^uint(0) >> 1)
-	if usage.Amount < maxInt {
-		usage.Amount++
+	if maxInt := int(^uint(0) >> 1); entry.Amount < maxInt {
+		entry.Amount++
 	}
-	usage.LastUsed = h.now()
-	queries[identifier] = usage
+	entry.LastUsed = h.now()
+	byIdentifier[identifier] = entry
 
 	h.saveLocked()
 }
 
-// boost returns a bounded usage score for identifier under query. The score
-// fades to zero after historyDecayDays while count gains diminish as history grows.
+// boost returns what remembered launches add to identifier's rank score once
+// query has been typed, from zero up to usageBoostCap.
 func (h *History) boost(query, identifier string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	amount, lastUsed, delta := h.usageLocked(query, identifier)
-	if amount <= 0 {
+	tally := h.tallyLocked(query, identifier)
+	if tally.uses <= 0 {
 		return 0
 	}
-	age := h.now().Sub(lastUsed)
+	age := h.now().Sub(tally.lastUsed)
 	if age < 0 {
 		age = 0
 	}
-	if age >= time.Duration(historyDecayDays)*24*time.Hour {
+	if age >= historyDecayDays*usageDay {
 		return 0
 	}
-	ageDays := int(age / (24 * time.Hour))
-	countScore := float64(amount) / (float64(amount) + 2)
-	recency := float64(historyDecayDays-ageDays) / historyDecayDays
-	score := float64(usageBoostCap) * countScore * recency / float64(max(delta, 1))
-	return int(math.Round(score))
+	return int(math.Round(usageScore(tally.uses, int(age/usageDay), tally.distance)))
 }
 
-// usageLocked aggregates Amount and the most recent LastUsed across every
-// stored query prefix-related to query (all of them when query is empty),
-// returning the smallest contributing prefix-length delta.
-func (h *History) usageLocked(query, identifier string) (amount int, lastUsed time.Time, delta int) {
-	deltaFound := false
-	for stored, queries := range h.data {
-		if query != "" && !strings.HasPrefix(query, stored) && !strings.HasPrefix(stored, query) {
+// usageScore is the ranking curve: saturating in the use count, linear in
+// recency down to zero at historyDecayDays, and diluted by how far the query
+// drifted from the one that was remembered.
+func usageScore(uses, ageDays, distance int) float64 {
+	saturation := float64(uses) / (float64(uses) + usageSaturation)
+	recency := float64(historyDecayDays-ageDays) / float64(historyDecayDays)
+	return float64(usageBoostCap) * saturation * recency / float64(max(distance, 1))
+}
+
+// usageTally summarises how one query relates to an identifier's remembered
+// launches.
+type usageTally struct {
+	// uses is the total launch count, saturating instead of wrapping.
+	uses int
+	// lastUsed is the most recent launch among the matching queries.
+	lastUsed time.Time
+	// distance is the smallest length gap between the typed query and a
+	// matching remembered query, and zero for an exact match.
+	distance int
+	// compared reports whether any query was measured by length, so that an
+	// exact match keeps outranking a remembered query of equal length.
+	compared bool
+}
+
+// tallyLocked summarises every remembered query prefix-related to query for
+// identifier; an empty query relates to all of them. Keeping the smallest
+// distance rather than whichever key the map happens to yield last is what
+// makes the score stable between runs.
+func (h *History) tallyLocked(query, identifier string) usageTally {
+	var tally usageTally
+	for recorded, byIdentifier := range h.data {
+		if !prefixRelated(query, recorded) {
 			continue
 		}
-		usage, ok := queries[identifier]
+		entry, ok := byIdentifier[identifier]
 		if !ok {
 			continue
 		}
-		if usage.Amount > 0 {
-			maxInt := int(^uint(0) >> 1)
-			if amount > maxInt-usage.Amount {
-				amount = maxInt
-			} else {
-				amount += usage.Amount
-			}
+		tally.uses = saturatingAdd(tally.uses, entry.Amount)
+		if entry.LastUsed.After(tally.lastUsed) {
+			tally.lastUsed = entry.LastUsed
 		}
-		if usage.LastUsed.After(lastUsed) {
-			lastUsed = usage.LastUsed
+		if query == "" {
+			continue
 		}
-		if query != "" {
-			d := len(stored) - len(query)
-			if d < 0 {
-				d = -d
-			}
-			if !deltaFound || d < delta {
-				delta = d
-				deltaFound = true
-			}
+		if distance := lengthGap(recorded, query); !tally.compared || distance < tally.distance {
+			tally.distance = distance
+			tally.compared = true
 		}
 	}
-	return amount, lastUsed, delta
+	return tally
+}
+
+// prefixRelated reports whether the query being typed and a remembered query
+// share a prefix in either direction: typing further into a remembered query,
+// or deleting back out of one.
+func prefixRelated(query, recorded string) bool {
+	if query == "" {
+		return true
+	}
+	return strings.HasPrefix(query, recorded) || strings.HasPrefix(recorded, query)
+}
+
+// lengthGap returns how many characters apart two related queries are.
+func lengthGap(a, b string) int {
+	gap := len(a) - len(b)
+	if gap < 0 {
+		return -gap
+	}
+	return gap
+}
+
+// saturatingAdd adds a remembered count to a running total. Counts that are not
+// positive are ignored, and the total clamps at the largest int so an oversized
+// history cannot wrap it negative.
+func saturatingAdd(total, count int) int {
+	if count <= 0 {
+		return total
+	}
+	if maxInt := int(^uint(0) >> 1); total > maxInt-count {
+		return maxInt
+	}
+	return total + count
 }
 
 func (h *History) saveLocked() {
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(h.data); err != nil {
-		if h.logf != nil {
-			h.logf("launcher: encode history: %v", err)
-		}
+		h.report("launcher: encode history: %v", err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(h.path), 0o755); err != nil {
-		if h.logf != nil {
-			h.logf("launcher: create history dir: %v", err)
-		}
+		h.report("launcher: create history dir: %v", err)
 		return
 	}
-	if err := os.WriteFile(h.path, buf.Bytes(), 0o600); err != nil && h.logf != nil {
-		h.logf("launcher: write history: %v", err)
+	if err := os.WriteFile(h.path, buf.Bytes(), 0o600); err != nil {
+		h.report("launcher: write history: %v", err)
+	}
+}
+
+// report passes a diagnostic to the logger the caller supplied, if any.
+func (h *History) report(format string, args ...any) {
+	if h.logf != nil {
+		h.logf(format, args...)
 	}
 }
