@@ -18,8 +18,8 @@ const (
 )
 
 type queryService interface {
-	Query(string)
-	Results() <-chan []launcher.Result
+	Query(string) uint64
+	Results() <-chan launcher.ResultBatch
 	Activate(string, string) error
 	Close()
 }
@@ -123,16 +123,16 @@ func run(
 	return 0
 }
 
-func waitForResults(results <-chan []launcher.Result, timeout time.Duration) ([]launcher.Result, error) {
+func waitForResults(results <-chan launcher.ResultBatch, timeout time.Duration) ([]launcher.Result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	select {
-	case result, ok := <-results:
+	case batch, ok := <-results:
 		if !ok {
 			return nil, fmt.Errorf("service closed")
 		}
-		return result, nil
+		return batch.Results, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
