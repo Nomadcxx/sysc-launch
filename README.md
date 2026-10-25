@@ -248,4 +248,8 @@ go build ./...
 
 ## License
 
-GPL-3.0-only. See [LICENSE](LICENSE).
+BSD-3-Clause. See [LICENSE](LICENSE).
+
+Releases up to v0.3.1 were published under GPL-3.0-only. The change to
+BSD-3-Clause followed the removal of a file that had been derived from another
+project's GPL-3 code; no such code remains in this module.
