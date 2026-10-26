@@ -32,7 +32,8 @@ func TestPublishedServiceAndHistoryAPI(t *testing.T) {
 	defer service.Close()
 
 	select {
-	case got := <-service.Results():
+	case batch := <-service.Results():
+		got := batch.Results
 		if len(got) != 1 || got[0].Entry.ID != "app.desktop" {
 			t.Fatalf("initial results = %+v", got)
 		}

@@ -80,7 +80,7 @@ type Service struct {
 	refreshCh      chan chan []Entry
 	openCh         chan struct{}
 	snapCh         chan snapshotUpdate
-	results        chan []Result
+	results        chan ResultBatch
 	ready          chan struct{}
 	done           chan struct{}
 	wg             sync.WaitGroup
@@ -118,7 +118,7 @@ func NewService(cfg ServiceConfig) *Service {
 		refreshCh:      make(chan chan []Entry),
 		openCh:         make(chan struct{}, 1),
 		snapCh:         make(chan snapshotUpdate),
-		results:        make(chan []Result, 1),
+		results:        make(chan ResultBatch, 1),
 		ready:          make(chan struct{}),
 		done:           make(chan struct{}),
 	}
@@ -138,27 +138,31 @@ func (s *Service) Open() {
 }
 
 // Query submits a new query; it supersedes any queued or in-flight older one.
-func (s *Service) Query(text string) {
+// It returns the query's generation, a monotonically increasing token that
+// stamped results carry (see ResultBatch) so a consumer can discard results for
+// a query that has since been superseded.
+func (s *Service) Query(text string) uint64 {
 	req := queryRequest{text: text, gen: s.gen.Add(1)}
 	for {
 		select {
 		case s.queryCh <- req:
-			return
+			return req.gen
 		case <-s.done:
-			return
+			return req.gen
 		default:
 			select {
 			case <-s.queryCh:
 			case <-s.done:
-				return
+				return req.gen
 			default:
 			}
 		}
 	}
 }
 
-// Results publishes ranked results as immutable slices, latest wins.
-func (s *Service) Results() <-chan []Result {
+// Results publishes ranked results as immutable batches, latest wins. Each
+// batch carries the generation of the query that produced it.
+func (s *Service) Results() <-chan ResultBatch {
 	return s.results
 }
 
@@ -358,7 +362,7 @@ func (s *Service) work() {
 			if len(s.queryCh) == 0 && s.gen.Load() == lastGen {
 				var out []Result
 				out, owners = run(lastQuery)
-				s.publishResults(out)
+				s.publishResults(out, lastGen)
 			}
 		case reply := <-s.applicationsCh:
 			reply <- cloneEntries(entries)
@@ -367,7 +371,7 @@ func (s *Service) work() {
 			out, own := run(req.text)
 			if s.gen.Load() == req.gen {
 				owners = own
-				s.publishResults(out)
+				s.publishResults(out, req.gen)
 			}
 		case req := <-s.activateCh:
 			recordQuery := lastQuery
@@ -490,10 +494,12 @@ func (s *Service) compositorRun(ctx context.Context, argv []string) error {
 	return nil
 }
 
-func (s *Service) publishResults(out []Result) {
+// publishResults stamps out with gen and publishes it as a batch, latest wins.
+func (s *Service) publishResults(out []Result, gen uint64) {
+	batch := ResultBatch{Gen: gen, Results: out}
 	for {
 		select {
-		case s.results <- out:
+		case s.results <- batch:
 			return
 		case <-s.done:
 			return

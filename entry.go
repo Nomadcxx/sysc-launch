@@ -50,3 +50,14 @@ type Result struct {
 	// Action is a desktop action ID when this row is one of Entry's actions.
 	Action string
 }
+
+// ResultBatch is a published result set tagged with the query generation that
+// produced it. A consumer compares Gen against the generation returned by Query
+// and drops a batch whose Gen is older, because "latest wins" buffering can
+// otherwise hand a slow consumer a snapshot computed for a superseded query.
+// Results is immutable after publish and may be empty (an empty batch still
+// carries its Gen so staleness is decidable).
+type ResultBatch struct {
+	Gen     uint64
+	Results []Result
+}
