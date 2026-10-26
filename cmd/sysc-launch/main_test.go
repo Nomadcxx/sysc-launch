@@ -18,7 +18,7 @@ import (
 
 type fakeService struct {
 	mu              sync.Mutex
-	results         chan []launcher.Result
+	results         chan launcher.ResultBatch
 	queries         []string
 	activations     []activation
 	activateErr     error
@@ -36,19 +36,20 @@ type activation struct {
 }
 
 func newFakeService(snapshots ...[]launcher.Result) *fakeService {
-	results := make(chan []launcher.Result, max(1, len(snapshots)))
-	for _, snapshot := range snapshots {
-		results <- snapshot
+	results := make(chan launcher.ResultBatch, max(1, len(snapshots)))
+	for i, snapshot := range snapshots {
+		results <- launcher.ResultBatch{Gen: uint64(i + 1), Results: snapshot}
 	}
 	return &fakeService{results: results}
 }
 
-func (s *fakeService) Query(query string) {
+func (s *fakeService) Query(query string) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.queries = append(s.queries, query)
+	return uint64(len(s.queries))
 }
-func (s *fakeService) Results() <-chan []launcher.Result { return s.results }
+func (s *fakeService) Results() <-chan launcher.ResultBatch { return s.results }
 func (s *fakeService) Activate(id, action string) error {
 	s.mu.Lock()
 	s.activations = append(s.activations, activation{id: id, action: action})

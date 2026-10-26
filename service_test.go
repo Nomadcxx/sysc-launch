@@ -18,8 +18,8 @@ func (c *atomicClock) advance(d time.Duration) { c.ns.Add(int64(d)) }
 func recvResults(t *testing.T, svc *Service) []Result {
 	t.Helper()
 	select {
-	case got := <-svc.Results():
-		return got
+	case batch := <-svc.Results():
+		return batch.Results
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for results")
 		return nil
@@ -345,6 +345,45 @@ func TestServiceResultsAreImmutableSlices(t *testing.T) {
 	}
 	if &first[0] == &second[0] {
 		t.Fatal("publications share a backing array")
+	}
+}
+
+func TestServiceBatchCarriesQueryGeneration(t *testing.T) {
+	t.Parallel()
+
+	svc := NewService(ServiceConfig{
+		Scan: func() []Entry { return []Entry{{Name: "Alpha"}, {Name: "Beta"}} },
+	})
+	defer svc.Close()
+
+	recvBatch := func() ResultBatch {
+		t.Helper()
+		select {
+		case b := <-svc.Results():
+			return b
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for results")
+			return ResultBatch{}
+		}
+	}
+
+	recvBatch() // initial publish (generation 0: no query submitted yet)
+
+	gen := svc.Query("alpha")
+	batch := recvBatch()
+	if batch.Gen != gen {
+		t.Fatalf("batch generation = %d, want the query's %d", batch.Gen, gen)
+	}
+
+	// A batch with no rows still carries its generation so a consumer can
+	// decide staleness for empty results too.
+	gen = svc.Query("zzz-no-match")
+	empty := recvBatch()
+	if empty.Gen != gen {
+		t.Fatalf("empty batch generation = %d, want the query's %d", empty.Gen, gen)
+	}
+	if len(empty.Results) != 0 {
+		t.Fatalf("expected empty results, got %+v", empty.Results)
 	}
 }
 
