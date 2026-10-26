@@ -1,0 +1,15 @@
+# The review path per area.
+#
+# There is one owner, so every path below names the same reviewer. The value of this file is the map:
+# which paths belong to which repository, and which of them are cross-repository contracts. A change to
+# a contract needs the repositories that consume it, not only the one that holds it.
+
+# The default owner for everything in this repository.
+/* @Nomadcxx
+
+# The library. The shell hosts it in process as the launcher service, so a change to
+# the exported names is a change to the shell.
+/*.go @Nomadcxx
+
+# The command line tool that queries and launches.
+/cmd/ @Nomadcxx
