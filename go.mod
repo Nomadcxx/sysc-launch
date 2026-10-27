@@ -1,6 +1,6 @@
 module github.com/Nomadcxx/sysc-launch
 
-go 1.26.4
+go 1.26.10
 
 require (
 	github.com/go-freedesktop/desktopentry v0.1.0

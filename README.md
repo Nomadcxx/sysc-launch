@@ -2,58 +2,63 @@
   <img src="assets/header.webp" alt="sysc-launch" height="64">
 </p>
 
-<p align="center"><strong>Linux launcher engine and JSON CLI with no compositor IPC dependency</strong></p>
+<p align="center"><strong>Standalone Linux application launcher engine and JSON CLI in Go</strong></p>
 
 `sysc-launch` reads XDG desktop entries, ranks application queries, and starts
-the selected desktop command. It ships as a Go library and a standalone CLI.
-Applications can embed the library and provide their own interface; sysc-shell
-uses it for its launcher.
+the selected desktop command. It ships as a Go library and a standalone CLI,
+with no dependency on sysc-shell or another sysc* component. Embedding
+applications provide their own interface; sysc-shell is one optional consumer.
 
 <details>
 <summary>Preview</summary>
 
-<table align="center">
-  <tr>
-    <td align="center" valign="top"><img src="assets/launcher.webp" alt="The sysc-shell launcher filtering applications for &quot;te&quot;" width="320" loading="lazy"><br><sub>Ranked search</sub></td>
-    <td align="center" valign="top"><img src="assets/launcher-browse.webp" alt="The sysc-shell launcher browsing all applications" width="320" loading="lazy"><br><sub>Browse</sub></td>
-  </tr>
-</table>
-<p align="center"><sub>The sysc-shell launcher, powered by sysc-launch (fixture data).</sub></p>
+<p align="center"><img src="assets/launcher-tour.webp" alt="Animated preview of the sysc-shell launcher searching applications and browsing the full list" width="380" loading="lazy"></p>
+<p align="center"><sub>Example interface from sysc-shell. sysc-launch provides the engine and CLI.</sub></p>
 </details>
 
-## Quick links
+## Quick Links
 
 - [Installation](#installation)
 - [Usage](#usage)
 - [Library](#library)
 - [Providers](#providers)
+- [Platform support](#platform-and-compositor-support)
+- [Development](#development)
+- [Contributing](CONTRIBUTING.md)
 - [GitHub releases](https://github.com/Nomadcxx/sysc-launch/releases)
 - [Go API](https://pkg.go.dev/github.com/Nomadcxx/sysc-launch)
 - [Arch package](https://aur.archlinux.org/packages/sysc-launch)
+- [Report an issue](https://github.com/Nomadcxx/sysc-launch/issues)
 
 ## Features
 
 - Scan XDG application directories and honor desktop-entry visibility rules.
 - Rank names, commands, keywords, comments, and categories with fuzzy search.
-- Launch desktop actions with their parsed arguments and working directories.
+- Launch applications and desktop actions with parsed arguments and working directories.
 - Add query providers in Go or adapt a command with `CommandProvider`.
 - Keep local usage history to improve ranking across sessions.
 
-## Compositor support
+## Platform and compositor support
 
-The default path launches each desktop entry's parsed `Exec=` command. It uses
-no compositor IPC, so any Linux session with XDG application entries and a
-display environment can run it. Examples include Niri, Sway, Hyprland, GNOME,
-and KDE Plasma. Start the CLI or embedding application from your desktop
-session so launched applications inherit its display environment.
+`sysc-launch` uses desktop entries and does not connect to a compositor. Its
+query and discovery paths need no graphical session. To start graphical
+applications, run the CLI or embedding application from the target desktop
+session so launched processes inherit its environment. This works across
+Wayland and X11 sessions, including Niri, Sway, Hyprland, GNOME, and KDE Plasma.
 
-`sysc-launch` supplies the launcher engine and CLI. It does not draw a panel or
-run a background daemon; an embedding application supplies the interface.
+| Install route | Current availability |
+| --- | --- |
+| GitHub release | Linux `amd64` and `arm64`; installs to a user-local prefix |
+| AUR | Arch Linux and derivatives, `x86_64` and `aarch64` |
+| Debian/Ubuntu, Fedora/openSUSE, NixOS | No project `.deb`, RPM, or NixOS package yet; use the release installer or Go install |
+
+`sysc-launch` supplies an engine and CLI. It does not draw a panel or run a
+background daemon; an embedding application supplies the interface.
 
 ## Requirements
 
 - Linux; release binaries are provided for `amd64` and `arm64`
-- Go 1.26.4 to build from source
+- Go 1.26.10 or newer to build from source
 - XDG desktop entries to list applications
 - A terminal emulator to launch entries marked `Terminal=true`; set
   `$TERMINAL` or install one of the supported terminals listed under
@@ -63,10 +68,11 @@ run a background daemon; an embedding application supplies the interface.
 
 ### GitHub release installer
 
-Download the installer for your architecture and run it as your desktop user:
+Download the installer for your architecture and run it as your desktop user.
+It installs a user-local binary and does not need root access or a Go runtime.
 
-Release installer assets start with `v0.5.0`. Until that release is available,
-clone the repository and run `go install ./cmd/sysc-launch`.
+The release installer assets start with `v0.5.0` and target Linux `amd64` and
+`arm64`:
 
 ```sh
 set -eu
@@ -82,11 +88,10 @@ chmod +x ./sysc-launch-installer
 ./sysc-launch-installer
 ```
 
-The installer downloads the launcher and `SHA256SUMS`, checks the launcher's
-SHA-256 digest, and installs it to `$HOME/.local/bin/sysc-launch`. It needs no
-Go runtime, root access, or system service. Use `--prefix DIR` to choose another
-absolute install prefix, `--version TAG` to install a specific release, or
-`--uninstall` to remove the installed binary.
+The installer downloads the launcher and `SHA256SUMS`, verifies the launcher's
+SHA-256 digest, and installs it to `$HOME/.local/bin/sysc-launch`. Use
+`--prefix DIR` to choose another absolute install prefix, `--version TAG` to
+install a specific release, or `--uninstall` to remove the installed binary.
 
 Add `$HOME/.local/bin` to `PATH` if it is not there already.
 
@@ -95,13 +100,12 @@ Add `$HOME/.local/bin` to `PATH` if it is not there already.
 ./sysc-launch-installer --prefix "$HOME/.local" --uninstall
 ```
 
-Starting with `v0.5.0`, releases include launcher and installer binaries for
-Linux `amd64` and `arm64`, plus `SHA256SUMS`. Arch users can install the AUR
-package.
+Each release includes the launcher and installer binaries for Linux `amd64`
+and `arm64`, plus `SHA256SUMS`.
 
 ### Go
 
-Install the CLI from a clone of this repository:
+Build and install the CLI from a clone of this repository:
 
 ```sh
 git clone https://github.com/Nomadcxx/sysc-launch.git
@@ -110,22 +114,23 @@ go install ./cmd/sysc-launch
 ```
 
 `go install` writes to `$GOBIN`, or Go's default binary directory when
-`GOBIN` is unset. Install the latest tagged module release without cloning:
+`GOBIN` is unset. To install the latest tagged module release without cloning:
 
 ```sh
 go install github.com/Nomadcxx/sysc-launch/cmd/sysc-launch@latest
 ```
 
-The repository also includes a Go installer for release binaries. From a
-clone, run it to install the latest release or name a tag:
+The repository includes a Go installer for release binaries. From a clone, run
+it to install the latest release or select a tag:
 
 ```sh
 go run ./cmd/installer
 go run ./cmd/installer --version v0.5.0
 ```
 
-The installer downloads the selected release and places the CLI in the
-configured prefix.
+The installer downloads the selected release, verifies its checksum, and
+places the CLI in the configured prefix. This route requires Go 1.26.10 or
+newer; the release-binary installer does not require Go.
 
 ### AUR
 
