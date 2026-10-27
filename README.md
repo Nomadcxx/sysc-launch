@@ -2,13 +2,14 @@
   <img src="assets/header.webp" alt="sysc-launch" height="64">
 </p>
 
-`sysc-launch` is a Go launcher engine and diagnostic CLI for Niri. It is a
-presentation-neutral library consumed by
-[sysc-shell](https://github.com/Nomadcxx/sysc-shell).
+`sysc-launch` is a Go application launcher engine and diagnostic CLI for Linux
+desktop sessions. It is a presentation-neutral library used by
+[sysc-shell](https://github.com/Nomadcxx/sysc-shell) and can also be used through
+its standalone JSON CLI.
 
 The module discovers desktop applications, ranks queries, and activates entries
-through Niri. It does not provide a standalone Wayland UI or daemon; sysc-shell
-owns the launcher panel and all presentation.
+without compositor-specific IPC. It does not provide a Wayland UI or daemon;
+consumers supply the presentation.
 
 <table align="center">
   <tr>
@@ -22,10 +23,14 @@ owns the launcher panel and all presentation.
 
 ## Requirements
 
-- Go 1.26.4
-- A compositor CLI in `PATH` for activation: `sysc-compositor` if present, otherwise `niri`
+- Linux; release binaries are provided for `amd64` and `arm64`
+- Go 1.26.4 to build from source
+- XDG desktop entries to list applications
+- Start `sysc-launch` from the user's desktop session so launched apps inherit
+  its environment
 
-Desktop scanning and `query` work without either.
+Activation uses no compositor command in Niri, Sway, Hyprland, GNOME, or KDE
+sessions. `sysc-launch` is a library and JSON CLI; it has no interactive UI.
 
 ## Build and install
 
@@ -36,10 +41,29 @@ From a clone of this repository:
 ```sh
 go build -o ./bin/sysc-launch ./cmd/sysc-launch
 go install ./cmd/sysc-launch
+go run ./cmd/installer
 ```
 
+The release installer needs assets from a tag built by this repository's
+workflow. Until that release is available, install from source with
+`go install ./cmd/sysc-launch`.
+
 `go install` writes the command to `GOBIN`, or to Go's default binary directory
-when `GOBIN` is unset.
+when `GOBIN` is unset. The Go installer downloads the latest matching release,
+checks its SHA-256 checksum, and installs it to `$HOME/.local/bin` by default.
+It needs no root access or system service. Run it again to update, or remove the
+binary with:
+
+```sh
+go run ./cmd/installer --version vX.Y.Z --prefix "$HOME/.local"
+go run ./cmd/installer --uninstall
+```
+
+Tags built by the release workflow publish the launcher and installer binaries
+for Linux `amd64` and `arm64`, plus `SHA256SUMS`. Running a release installer
+binary does not require Go. The release contains one binary for Linux
+distributions on those architectures; it does not create distro-specific
+packages.
 
 ### AUR
 
@@ -68,18 +92,11 @@ terminal flag, and desktop actions, plus its numeric `Score`. With no query it
 returns the current application list. A query beginning with `/` uses the
 provider-prefix routing; `/apps` selects installed applications.
 
-`launch` activates the identified application or optional desktop action via:
-
-```text
-sysc-compositor msg action spawn -- PROGRAM [ARG...]
-```
-
-or, when `sysc-compositor` is not installed, the same command through `niri`.
-
-Arguments come from the desktop entry and are passed without a shell. An
-entry with a `Path=` working directory is instead spawned as
-`sh -c 'cd "$1" && shift && exec "$@"' sh PATH PROGRAM [ARG...]` because
-Niri's spawn action takes no directory.
+`launch` starts the identified application or desktop action with the expanded
+desktop-entry arguments. Arguments are passed directly, without a shell. An
+entry with `Path=` starts in that working directory. The application runs in
+its own session; `launch` returns once the operating system starts the process,
+without waiting for its window or full initialization.
 
 ## Library
 
@@ -134,8 +151,8 @@ func main() {
 ```
 
 `Query` and `Open` are asynchronous. `Activate` is synchronous and records
-usage only after Niri reports a successful spawn. Call `Close` when the service
-is no longer needed.
+usage only after the operating system starts the application successfully. Call
+`Close` when the service is no longer needed.
 
 ## Providers
 
@@ -204,10 +221,11 @@ It excludes entries marked `Hidden` or `NoDisplay`, entries rejected by
 `OnlyShowIn` or `NotShowIn`, and entries whose `TryExec` is unavailable.
 
 `Terminal=true` entries use `$TERMINAL` when configured (the value may
-include arguments), then try `kitty`,
-`foot`, `alacritty`, `wezterm`, and `ghostty`. Such an entry is excluded when
-no terminal can be resolved. Valid desktop actions are exposed separately and
-can be selected by action ID.
+include arguments), then try `kitty`, `foot`, `alacritty`, `wezterm`,
+`ghostty`, `konsole`, and `gnome-terminal`. The terminal-specific execution
+arguments are preserved. Such an entry is excluded when no terminal can be
+resolved. Valid desktop actions are exposed separately and can be selected by
+action ID.
 
 Application names, generic names, keywords, commands, comments, and categories are fuzzy
 matched with fzf's ranking algorithm. Recent and repeated successful launches
@@ -240,10 +258,10 @@ applications therefore do not merge history.
 ## Checks
 
 ```sh
-go test -count=1 ./...
-go test -race -count=1 ./...
-go vet ./...
-go build ./...
+go test -p 2 -count=1 ./...
+go test -race -p 2 -count=1 ./...
+go vet -p 2 ./...
+go build -p 2 ./...
 ```
 
 ## License

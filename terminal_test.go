@@ -99,6 +99,97 @@ func TestTerminalFallsBackInPolicyOrder(t *testing.T) {
 	}
 }
 
+func TestTerminalCandidatesUseTheirExecutionSyntax(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		binary   string
+		wantArgv []string
+	}{
+		{
+			name:     "GNOME Terminal uses double dash",
+			binary:   "gnome-terminal",
+			wantArgv: []string{"/usr/bin/gnome-terminal", "--", "editor", "file"},
+		},
+		{
+			name:     "Konsole uses -e",
+			binary:   "konsole",
+			wantArgv: []string{"/usr/bin/konsole", "-e", "editor", "file"},
+		},
+		{
+			name:     "WezTerm uses start double dash",
+			binary:   "wezterm",
+			wantArgv: []string{"/usr/bin/wezterm", "start", "--", "editor", "file"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, err := expandDesktopEntry(
+				&desktopentry.Entry{Exec: "editor file", Terminal: true},
+				func(string) string { return "" },
+				func(name string) (string, error) {
+					if name == tt.binary {
+						return "/usr/bin/" + name, nil
+					}
+					return "", errors.New("not found")
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(entry.Argv, tt.wantArgv) {
+				t.Fatalf("argv = %q, want %q", entry.Argv, tt.wantArgv)
+			}
+		})
+	}
+}
+
+func TestTerminalOverrideUsesKnownTerminalSyntax(t *testing.T) {
+	t.Parallel()
+
+	entry, err := expandDesktopEntry(
+		&desktopentry.Entry{Exec: "editor", Terminal: true},
+		func(key string) string {
+			if key == "TERMINAL" {
+				return "wezterm --config-file /tmp/terminal.lua"
+			}
+			return ""
+		},
+		func(name string) (string, error) {
+			if name == "wezterm" {
+				return "/usr/bin/wezterm", nil
+			}
+			return "", errors.New("not found")
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/usr/bin/wezterm", "--config-file", "/tmp/terminal.lua", "start", "--", "editor"}
+	if !slices.Equal(entry.Argv, want) {
+		t.Fatalf("argv = %q, want %q", entry.Argv, want)
+	}
+}
+
+func TestSelectedWezTermUsesItsExecutionSyntax(t *testing.T) {
+	entries := []Entry{{
+		ID:          "wezterm",
+		TerminalApp: true,
+		Argv:        []string{"wezterm", "--config-file", "/tmp/terminal.lua"},
+	}}
+	got := resolveTerminalEntry(entries, "wezterm", func(name string) (string, error) {
+		if name == "wezterm" {
+			return "/usr/bin/wezterm", nil
+		}
+		return "", errors.New("not found")
+	})
+	want := []string{"/usr/bin/wezterm", "--config-file", "/tmp/terminal.lua", "start", "--"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("terminal argv = %q, want %q", got, want)
+	}
+}
+
 func TestTerminalFallsBackWhenConfiguredTerminalIsMissing(t *testing.T) {
 	t.Parallel()
 

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -17,16 +19,20 @@ const (
 	defaultActivateTimeout = 5 * time.Second
 )
 
-// ServiceConfig wires the launcher service. Nil Scan, Rank, Run, Getenv,
-// LookPath, and Now use the XDG desktop scanner, built-in ranker, compositor spawn,
-// os.Getenv, exec.LookPath, and time.Now. Non-positive StaleAfter and
-// ActivateTimeout use one minute and five seconds. Nil History disables usage
-// persistence and boosting; nil Logf suppresses scanner and provider
-// diagnostics.
+// ServiceConfig wires the launcher service. Nil Scan, Rank, Getenv, LookPath,
+// and Now use the XDG desktop scanner, built-in ranker, os.Getenv,
+// exec.LookPath, and time.Now. Nil Run starts desktop commands directly; a
+// configured Run receives the legacy Niri spawn argv. Non-positive StaleAfter
+// and ActivateTimeout use one minute and five seconds; the timeout applies to
+// a configured Run callback. Nil History disables usage persistence and
+// boosting; nil Logf suppresses scanner and provider diagnostics.
 type ServiceConfig struct {
-	Scan            func() []Entry
-	History         *History
-	Rank            func(entries []Entry, query string, boost func(query, identifier string) int) []Result
+	Scan    func() []Entry
+	History *History
+	Rank    func(entries []Entry, query string, boost func(query, identifier string) int) []Result
+	// Run overrides activation with the legacy Niri spawn command. It receives
+	// `niri msg action spawn --` followed by the command argv. Nil starts the
+	// desktop command directly, independent of the compositor.
 	Run             func(ctx context.Context, argv []string) error
 	Getenv          func(string) string
 	LookPath        func(string) (string, error)
@@ -208,9 +214,8 @@ func (s *Service) RefreshApplications() ([]Entry, error) {
 
 // Activate runs a row of the last published result set on the service
 // goroutine. A row whose provider has an Activate function goes to it;
-// anything else spawns the entry (or one of its desktop actions) through
-// `<compositor> msg action spawn`, where the compositor CLI is sysc-compositor
-// or else niri (D6/D9). Usage is recorded only on success.
+// otherwise the desktop command starts directly unless ServiceConfig.Run
+// supplies the legacy Niri spawn override. Usage is recorded only on success.
 func (s *Service) Activate(id, action string) error {
 	req := activateRequest{id: id, action: action, reply: make(chan error, 1)}
 	select {
@@ -431,20 +436,20 @@ func (s *Service) activate(entries []Entry, query, id, action string) error {
 		return fmt.Errorf("launcher: entry %q action %q has no program to spawn", id, action)
 	}
 
-	run := s.cfg.Run
-	if run == nil {
-		run = s.compositorRun
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ActivateTimeout)
-	defer cancel()
-	spawn := []string{"niri", "msg", "action", "spawn", "--"}
-	if workDir != "" {
-		// niri spawn has no cwd; sh keeps the target argv positional, so
-		// neither the directory nor the arguments need quoting.
-		spawn = append(spawn, "sh", "-c", `cd "$1" && shift && exec "$@"`, "sh", workDir)
-	}
-	spawn = append(spawn, argv...)
-	if err := run(ctx, spawn); err != nil {
+	if s.cfg.Run != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ActivateTimeout)
+		defer cancel()
+		spawn := []string{"niri", "msg", "action", "spawn", "--"}
+		if workDir != "" {
+			// niri spawn has no cwd; keep the target argv positional so neither
+			// the directory nor application arguments need shell quoting.
+			spawn = append(spawn, "sh", "-c", `cd "$1" && shift && exec "$@"`, "sh", workDir)
+		}
+		spawn = append(spawn, argv...)
+		if err := s.cfg.Run(ctx, spawn); err != nil {
+			return err
+		}
+	} else if err := launchDesktop(argv, workDir); err != nil {
 		return err
 	}
 	if s.cfg.History != nil {
@@ -453,44 +458,22 @@ func (s *Service) activate(entries []Entry, query, id, action string) error {
 	return nil
 }
 
-// compositorNames is the order the production runner looks for a compositor
-// CLI in: sysc-compositor speaks Niri's msg contract, and niri itself is the
-// fallback.
-var compositorNames = []string{"sysc-compositor", "niri"}
-
-// compositorBin is the path of the first compositor CLI lookPath finds.
-func compositorBin(lookPath func(string) (string, error)) (string, error) {
-	var firstErr error
-	for _, name := range compositorNames {
-		path, err := lookPath(name)
-		if err == nil {
-			return path, nil
-		}
-		if firstErr == nil {
-			firstErr = err
-		}
+// launchDesktop starts an application without compositor IPC. ponytail: success
+// means process start; detecting later application failures needs supervision.
+func launchDesktop(argv []string, workDir string) error {
+	var cmd *exec.Cmd
+	if workDir != "" && !filepath.IsAbs(argv[0]) && strings.ContainsRune(argv[0], filepath.Separator) {
+		// Resolve relative executable paths after the child changes directory.
+		cmd = &exec.Cmd{Path: argv[0], Args: argv, Dir: workDir}
+	} else {
+		cmd = exec.Command(argv[0], argv[1:]...)
+		cmd.Dir = workDir
 	}
-	return "", fmt.Errorf("launcher: no compositor in PATH (tried %s): %w",
-		strings.Join(compositorNames, ", "), firstErr)
-}
-
-// compositorRun is the production spawn path: argv only, no shell (D9). The
-// spawn argv names niri, which an injected Run sees unchanged; here its first
-// word is replaced with the compositor CLI found on PATH. A missing compositor
-// is an activation error, never a panic.
-func (s *Service) compositorRun(ctx context.Context, argv []string) error {
-	lookPath := s.cfg.LookPath
-	if lookPath == nil {
-		lookPath = exec.LookPath
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("launcher: start %s: %w", argv[0], err)
 	}
-	bin, err := compositorBin(lookPath)
-	if err != nil {
-		return err
-	}
-	cmd := exec.CommandContext(ctx, bin, argv[1:]...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("launcher: %s: %w: %s", bin, err, strings.TrimSpace(string(out)))
-	}
+	go func() { _ = cmd.Wait() }()
 	return nil
 }
 
