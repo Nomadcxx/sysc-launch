@@ -150,7 +150,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          sha256sum sysc-launch_* > SHA256SUMS
+          sha256sum sysc-launch_linux_* sysc-launch-installer_linux_* > SHA256SUMS
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
