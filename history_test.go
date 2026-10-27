@@ -1,8 +1,10 @@
 package launcher
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -317,5 +319,119 @@ func TestRankEmptyQueryOrdersByUsageThenName(t *testing.T) {
 	}, "", h.boost)
 	if len(got) != 2 || got[0].Entry.Name != "Zulu" || got[1].Entry.Name != "Alpha" {
 		t.Fatalf("empty-query order = %+v, want Zulu then Alpha", got)
+	}
+}
+
+// A save must not rewrite the history in place: an in-place write truncates
+// the file first, so a crash between the truncate and the write leaves a
+// half-written gob and the ranking history is gone.
+func TestASaveReplacesTheHistoryFileInsteadOfTruncatingIt(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "history.gob")
+	clock := &testClock{t: time.Now()}
+	h := loadHistory(path, clock.now, nil)
+	h.record("fire", "firefox.desktop")
+
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat history: %v", err)
+	}
+
+	h.record("term", "kitty.desktop")
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat history: %v", err)
+	}
+	if os.SameFile(before, after) {
+		t.Fatal("the history file was rewritten in place: a crash mid-write would wipe it")
+	}
+}
+
+// A write that fails the way a full disk does must leave the previous history
+// readable, and must not leave a staged file behind.
+func TestAFailedSaveKeepsThePreviousHistory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.gob")
+	clock := &testClock{t: time.Now()}
+	h := loadHistory(path, clock.now, nil)
+	h.record("fire", "firefox.desktop")
+
+	h.stage = func(string, []byte) (string, error) {
+		return "", errors.New("no space left on device")
+	}
+	h.record("term", "kitty.desktop")
+
+	reloaded := loadHistory(path, clock.now, nil)
+	if got := reloaded.boost("fire", "firefox.desktop"); got == 0 {
+		t.Fatal("the previous history was lost after a failed save")
+	}
+	if got := reloaded.boost("term", "kitty.desktop"); got != 0 {
+		t.Fatalf("boost for the entry that failed to save = %d, want 0", got)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "history.gob" {
+			t.Fatalf("a failed save left %q behind", entry.Name())
+		}
+	}
+}
+
+// An unreadable history is moved aside, so the next save does not overwrite
+// the evidence and the start after it does not read the same broken file.
+func TestACorruptHistoryIsQuarantined(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.gob")
+	if err := os.WriteFile(path, []byte("not a gob stream"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	clock := &testClock{t: time.Now()}
+	h := loadHistory(path, clock.now, nil)
+	if got := h.boost("fire", "firefox.desktop"); got != 0 {
+		t.Fatalf("boost from corrupt history = %d, want 0", got)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("the corrupt history is still in place: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	quarantined := 0
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "history.gob.") && strings.HasSuffix(entry.Name(), ".corrupt") {
+			quarantined++
+		}
+	}
+	if quarantined != 1 {
+		t.Fatalf("quarantined files = %d, want 1 (%v)", quarantined, entries)
+	}
+}
+
+// The state directory holds the queries the user typed, so it is not world
+// readable.
+func TestTheHistoryDirectoryIsPrivate(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "state")
+	path := filepath.Join(dir, "history.gob")
+	h := loadHistory(path, (&testClock{t: time.Now()}).now, nil)
+	h.record("fire", "firefox.desktop")
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat state dir: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("state dir mode = %o, want 700", perm)
 	}
 }
