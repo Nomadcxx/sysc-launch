@@ -3,6 +3,7 @@ package launcher
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -44,6 +45,11 @@ const (
 	usageSaturation = 2
 	// usageDay is the unit a remembered launch ages in.
 	usageDay = 24 * time.Hour
+	// historyDirMode keeps the state directory private: the queries a user
+	// typed are their own business.
+	historyDirMode = 0o700
+	// historyFileMode keeps the gob readable by its owner only.
+	historyFileMode = 0o600
 )
 
 // historyData is one identifier's remembered launches under one query. The
@@ -62,6 +68,11 @@ type History struct {
 	now  func() time.Time
 	logf logFunc
 	data map[string]map[string]historyData
+	// stage writes the encoded history into the state directory and returns
+	// the staged path. It is a field so a test can fail a write the way a
+	// full disk does; the default stages a file that is later renamed over
+	// the history.
+	stage func(dir string, data []byte) (string, error)
 }
 
 // DefaultHistory loads usage history from
@@ -94,10 +105,11 @@ func loadHistory(path string, now func() time.Time, logf func(string, ...any)) *
 		now = time.Now
 	}
 	h := &History{
-		path: path,
-		now:  now,
-		logf: logf,
-		data: make(map[string]map[string]historyData),
+		path:  path,
+		now:   now,
+		logf:  logf,
+		data:  make(map[string]map[string]historyData),
+		stage: stageHistoryFile,
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -109,8 +121,22 @@ func loadHistory(path string, now func() time.Time, logf func(string, ...any)) *
 	if err := gob.NewDecoder(bytes.NewReader(raw)).Decode(&h.data); err != nil {
 		h.report("launcher: decode history: %v", err)
 		h.data = make(map[string]map[string]historyData)
+		h.quarantineLocked()
 	}
 	return h
+}
+
+// quarantineLocked moves an unreadable history aside instead of leaving it in
+// place. The next save would overwrite it, and until then a half-written gob
+// looks like a corrupt file on every start.
+func (h *History) quarantineLocked() {
+	stamp := h.now().UTC().Format("20060102T150405Z")
+	aside := fmt.Sprintf("%s.%s.corrupt", h.path, stamp)
+	if err := os.Rename(h.path, aside); err != nil {
+		h.report("launcher: quarantine corrupt history: %v", err)
+		return
+	}
+	h.report("launcher: quarantined corrupt history: %s", aside)
 }
 
 // record remembers one successful launch of identifier under query and writes
@@ -245,19 +271,83 @@ func saturatingAdd(total, count int) int {
 	return total + count
 }
 
+// saveLocked writes the history so that a crash cannot lose it. The gob is
+// staged next to the target, synced, and renamed over it: a rename is atomic,
+// so the history on disk is either the previous one or the new one, never a
+// half-written file.
 func (h *History) saveLocked() {
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(h.data); err != nil {
 		h.report("launcher: encode history: %v", err)
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(h.path), 0o755); err != nil {
+	dir := filepath.Dir(h.path)
+	if err := os.MkdirAll(dir, historyDirMode); err != nil {
 		h.report("launcher: create history dir: %v", err)
 		return
 	}
-	if err := os.WriteFile(h.path, buf.Bytes(), 0o600); err != nil {
-		h.report("launcher: write history: %v", err)
+	// A directory that already exists keeps its old mode, so tighten it
+	// when that is allowed; the queries in it are the user's own.
+	_ = os.Chmod(dir, historyDirMode)
+
+	stage := h.stage
+	if stage == nil {
+		stage = stageHistoryFile
 	}
+	staged, err := stage(dir, buf.Bytes())
+	if err != nil {
+		// The previous history stays in place: it is still the newest
+		// complete one on disk.
+		h.report("launcher: write history: %v", err)
+		return
+	}
+	if err := os.Rename(staged, h.path); err != nil {
+		_ = os.Remove(staged)
+		h.report("launcher: write history: %v", err)
+		return
+	}
+	syncDir(dir)
+}
+
+// stageHistoryFile writes data into a fresh file in dir and returns its path.
+// The file is synced before it is returned, so the rename that follows cannot
+// publish a name whose contents are not on disk yet.
+func stageHistoryFile(dir string, data []byte) (string, error) {
+	file, err := os.CreateTemp(dir, ".history.gob.*.tmp")
+	if err != nil {
+		return "", err
+	}
+	name := file.Name()
+	fail := func(err error) (string, error) {
+		_ = file.Close()
+		_ = os.Remove(name)
+		return "", err
+	}
+	if err := file.Chmod(historyFileMode); err != nil {
+		return fail(err)
+	}
+	if _, err := file.Write(data); err != nil {
+		return fail(err)
+	}
+	if err := file.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", err
+	}
+	return name, nil
+}
+
+// syncDir flushes the directory entry so the rename survives a power loss.
+// Not every filesystem allows it, and the history is not lost if it fails.
+func syncDir(dir string) {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer handle.Close()
+	_ = handle.Sync()
 }
 
 // report passes a diagnostic to the logger the caller supplied, if any.
