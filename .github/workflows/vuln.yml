@@ -12,12 +12,13 @@ on:
   schedule:
     - cron: '31 5 * * 1'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-scan-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

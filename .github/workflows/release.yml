@@ -1,0 +1,159 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The tag to rehearse, for example v0.5.0.'
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      commit: ${{ steps.tag.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Parse tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "tag '$tag' is not v<major>.<minor>.<patch>" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            git fetch --no-tags --force origin "refs/tags/$tag:refs/tags/$tag"
+            commit="$(git rev-list -n1 "$tag")"
+          else
+            commit="$(git rev-parse HEAD)"
+          fi
+          test -n "$commit"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Verify the tagged commit reached the default branch
+        env:
+          COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          if ! git merge-base --is-ancestor "$COMMIT" origin/main; then
+            echo "the commit $COMMIT under ${{ steps.tag.outputs.tag }} never reached main" >&2
+            exit 1
+          fi
+
+  checks:
+    needs: gate
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  scan:
+    needs: gate
+    uses: ./.github/workflows/vuln.yml
+    permissions:
+      contents: read
+
+  build:
+    needs: [gate, checks, scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.commit }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          GOOS: linux
+          CGO_ENABLED: "0"
+          BUILD_DIR: ${{ runner.temp }}/sysc-launch-dist
+        run: |
+          set -euo pipefail
+          mkdir -p "$BUILD_DIR"
+          go build -trimpath -ldflags='-s -w' -o "$BUILD_DIR/sysc-launch_linux_${GOARCH}" ./cmd/sysc-launch
+          go build -trimpath -ldflags='-s -w' -o "$BUILD_DIR/sysc-launch-installer_linux_${GOARCH}" ./cmd/installer
+      - name: Verify binaries carry the tagged commit
+        env:
+          COMMIT: ${{ needs.gate.outputs.commit }}
+          BUILD_DIR: ${{ runner.temp }}/sysc-launch-dist
+        run: |
+          set -euo pipefail
+          for binary in "$BUILD_DIR"/*; do
+            info="$(go version -m "$binary")"
+            revision="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*build[[:space:]]*vcs\.revision=//p')"
+            modified="$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*build[[:space:]]*vcs\.modified=//p')"
+            if [ "$revision" != "$COMMIT" ] || [ "$modified" != "false" ]; then
+              echo "$binary was built from revision '$revision' (modified=$modified), expected $COMMIT (modified=false)" >&2
+              exit 1
+            fi
+          done
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ runner.temp }}/sysc-launch-dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-linux-${{ matrix.goarch }}
+          path: ${{ runner.temp }}/sysc-launch-dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [gate, checks, scan, build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: dist-linux-*
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum sysc-launch_* > SHA256SUMS
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.gate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" dist/* \
+            --title "sysc-launch $TAG" \
+            --generate-notes \
+            --verify-tag
