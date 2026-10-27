@@ -13,7 +13,22 @@ import (
 
 var ErrNoTerminal = errors.New("launcher: no terminal found")
 
-var terminalCandidates = [...]string{"kitty", "foot", "alacritty", "wezterm", "ghostty"}
+type terminalCandidate struct {
+	name     string
+	execArgs []string
+}
+
+// ponytail: keep common terminals here; $TERMINAL remains the fallback for
+// terminals whose execution syntax is not listed.
+var terminalCandidates = [...]terminalCandidate{
+	{name: "kitty", execArgs: []string{"-e"}},
+	{name: "foot", execArgs: []string{"-e"}},
+	{name: "alacritty", execArgs: []string{"-e"}},
+	{name: "wezterm", execArgs: []string{"start", "--"}},
+	{name: "ghostty", execArgs: []string{"-e"}},
+	{name: "konsole", execArgs: []string{"-e"}},
+	{name: "gnome-terminal", execArgs: []string{"--"}},
+}
 
 type getenvFunc func(string) string
 
@@ -29,28 +44,42 @@ func resolveTerminal(getenv getenvFunc, lookPath lookPathFunc) ([]string, error)
 	if configured := strings.TrimSpace(getenv("TERMINAL")); configured != "" {
 		if words, err := shellwords.Parse(configured); err == nil && len(words) > 0 {
 			if path, err := lookPath(words[0]); err == nil {
-				return append([]string{path}, words[1:]...), nil
+				argv := append([]string{path}, words[1:]...)
+				if candidate, ok := terminalCandidateFor(filepath.Base(path)); ok {
+					return append(argv, candidate.execArgs...), nil
+				}
+				return append(argv, "-e"), nil
 			}
 		}
 	}
 	for _, candidate := range terminalCandidates {
-		if path, err := lookPath(candidate); err == nil {
-			return []string{path}, nil
+		if path, err := lookPath(candidate.name); err == nil {
+			return append([]string{path}, candidate.execArgs...), nil
 		}
 	}
 	return nil, ErrNoTerminal
 }
 
 func terminalArgv(terminal []string, argv []string) []string {
-	out := make([]string, 0, len(terminal)+len(argv)+1)
+	out := make([]string, 0, len(terminal)+len(argv))
 	out = append(out, terminal...)
-	out = append(out, "-e")
 	return append(out, argv...)
 }
 
+func terminalCandidateFor(name string) (terminalCandidate, bool) {
+	for _, candidate := range terminalCandidates {
+		if candidate.name == name {
+			return candidate, true
+		}
+	}
+	return terminalCandidate{}, false
+}
+
 func isTerminalEmulator(terminal bool, categories, argv []string, lookPath lookPathFunc) bool {
-	if terminal || len(argv) == 0 || !slices.Contains(categories, "TerminalEmulator") ||
-		!slices.Contains(terminalCandidates[:], filepath.Base(argv[0])) {
+	if terminal || len(argv) == 0 || !slices.Contains(categories, "TerminalEmulator") {
+		return false
+	}
+	if _, ok := terminalCandidateFor(filepath.Base(argv[0])); !ok {
 		return false
 	}
 	if filepath.Base(argv[0]) == "foot" {
@@ -79,8 +108,10 @@ func resolveTerminalEntry(entries []Entry, id string, lookPath lookPathFunc) []s
 		lookPath = exec.LookPath
 	}
 	for _, entry := range entries {
-		if entry.ID != id || !entry.TerminalApp || len(entry.Argv) == 0 ||
-			!slices.Contains(terminalCandidates[:], filepath.Base(entry.Argv[0])) {
+		if entry.ID != id || !entry.TerminalApp || len(entry.Argv) == 0 {
+			continue
+		}
+		if _, ok := terminalCandidateFor(filepath.Base(entry.Argv[0])); !ok {
 			continue
 		}
 		path, err := lookPath(entry.Argv[0])
@@ -89,6 +120,9 @@ func resolveTerminalEntry(entries []Entry, id string, lookPath lookPathFunc) []s
 		}
 		argv := slices.Clone(entry.Argv)
 		argv[0] = path
+		if candidate, ok := terminalCandidateFor(filepath.Base(path)); ok {
+			argv = append(argv, candidate.execArgs...)
+		}
 		return argv
 	}
 	return nil

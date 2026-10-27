@@ -3,11 +3,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
-# Supersede in-flight runs for the same branch or PR so a burst of pushes does
-# not queue a full build each.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-ci-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -24,11 +23,11 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: vet
-        run: go vet ./...
+        run: go vet -p 2 ./...
       - name: test
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -p 2 ./...
       - name: build
-        run: go build ./...
+        run: go build -p 2 ./...
 
   verify:
     uses: Nomadcxx/.github/.github/workflows/go-verify.yml@cd88b2e0b04be9dee5a2becf3a4586b108dd9c11

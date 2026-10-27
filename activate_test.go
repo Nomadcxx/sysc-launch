@@ -181,20 +181,20 @@ func TestActivateUnknownEntryOrAction(t *testing.T) {
 	}
 }
 
-func TestActivateWithoutNiriIsErrorNotPanic(t *testing.T) {
+func TestActivateMissingProgramReturnsError(t *testing.T) {
 	t.Parallel()
 
+	missingProgram := filepath.Join(t.TempDir(), "missing")
 	svc := NewService(ServiceConfig{
 		Scan: func() []Entry {
-			return []Entry{{ID: "firefox.desktop", Name: "Firefox", Argv: []string{"firefox"}}}
+			return []Entry{{ID: "missing", Argv: []string{missingProgram}}}
 		},
-		LookPath: func(string) (string, error) { return "", errors.New("not found") },
 	})
 	defer svc.Close()
 	recvResults(t, svc)
 
-	if err := svc.Activate("firefox.desktop", ""); err == nil {
-		t.Fatal("missing niri returned nil error")
+	if err := svc.Activate("missing", ""); err == nil {
+		t.Fatal("missing executable returned nil error")
 	}
 }
 
@@ -263,6 +263,49 @@ func TestActivateWorkDirSpawnsViaSh(t *testing.T) {
 		"sh", "-c", `cd "$1" && shift && exec "$@"`, "sh", "/srv/game", "./game"}
 	if got := runner.lastArgv(); !slices.Equal(got, want) {
 		t.Fatalf("spawn argv = %q, want %q", got, want)
+	}
+}
+
+func TestActivateDirectLaunchUsesArgvAndWorkDir(t *testing.T) {
+	root := t.TempDir()
+	workDir := filepath.Join(root, "work dir")
+	if err := os.Mkdir(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "launch output")
+	script := filepath.Join(workDir, "capture.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n%s\\n%s\\n' \"$PWD\" \"$1\" \"$2\" > \"$SYSC_LAUNCH_TEST_OUTPUT\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SYSC_LAUNCH_TEST_OUTPUT", output)
+
+	svc := NewService(ServiceConfig{
+		Scan: func() []Entry {
+			return []Entry{{ID: "capture", Argv: []string{"./capture.sh", "one value", "two"}, WorkDir: workDir}}
+		},
+		// Direct launching must not need a compositor executable in PATH.
+		LookPath: func(string) (string, error) { return "", errors.New("not found") },
+	})
+	t.Cleanup(svc.Close)
+	recvResults(t, svc)
+
+	if err := svc.Activate("capture", ""); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, err := os.ReadFile(output)
+		if err == nil {
+			want := workDir + "\none value\ntwo\n"
+			if string(got) != want {
+				t.Fatalf("launch output = %q, want %q", got, want)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("launch output not written: %v", err)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
