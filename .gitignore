@@ -16,3 +16,6 @@ go.work.sum
 # Plans, roadmaps and design notes stay local
 docs/plans/
 docs/roadmap.md
+
+# A binary built inside its command directory
+/cmd/sysc-launch/sysc-launch

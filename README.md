@@ -159,14 +159,18 @@ Search for applications and copy a desktop ID from the JSON output:
 sysc-launch query terminal
 sysc-launch query /apps
 sysc-launch launch DESKTOP_ID
+sysc-launch launch DESKTOP_ID ACTION_ID
 ```
 
 `query` writes one JSON array to standard output. Each result contains an
 `Entry` with the desktop ID, display metadata, expanded argument vector,
-terminal flag, and desktop actions, plus a numeric `Score` and an `Action` ID
-when the row represents a desktop action. With no query, it returns the
-application list. A query beginning with `/` selects a provider route; `/apps`
-selects installed applications, and `/` lists the providers.
+terminal flag, and desktop actions, plus a numeric `Score`. Applications get
+one row each with an empty `Action`; their desktop actions are listed in
+`Entry.Actions`, each with its own `ID`, `Name`, `IconName`, and argument
+vector. Pass an action's `ID` to `launch` to run it. With no
+query, it returns the application list. A query beginning with `/` selects a
+provider route; `/apps` selects installed applications, and `/` lists the
+providers.
 
 `launch` starts the identified application or desktop action with the expanded
 desktop-entry argument vector. The launcher passes each argument to the
@@ -308,8 +312,18 @@ It excludes entries marked `Hidden` or `NoDisplay`, entries rejected by
 include arguments), then try `kitty`, `foot`, `alacritty`, `wezterm`,
 `ghostty`, `konsole`, and `gnome-terminal`. The terminal-specific execution
 arguments stay intact. The scanner skips such entries when no terminal is
-available. The scanner exposes valid desktop actions as separate rows that you
-can select by action ID.
+available.
+
+Each valid `[Desktop Action]` group becomes an `Action` on its application's
+`Entry.Actions`, in the order of the entry's `Actions=` key. Its `IconName` is
+the action's own `Icon=` and is empty when it has none, so fall back to the
+application's icon. An action keeps the application's `Path=` and terminal
+wrapping, and is skipped when its `Exec` has no program.
+The built-in ranker does not search action names or return action rows; the
+embedding application decides how to show them. sysc-shell, for example,
+lists an application's actions when you right-click it and adds its own action
+rows to search. Run an action with `Activate(id, actionID)` in the library or
+`sysc-launch launch DESKTOP_ID ACTION_ID` from the CLI.
 
 Application names, generic names, keywords, commands, comments, and categories
 use fzf's ranking algorithm. Recent and repeated successful launches add a
@@ -333,6 +347,11 @@ $HOME/.local/state/sysc-launch/history.gob
 History is local gob data written with owner-only file permissions. Successful
 launches persist the associated query prefixes and desktop IDs, so the file can
 reveal application-launch habits. Delete it to reset ranking history.
+
+Each save writes a temporary file beside the history, syncs it, and renames it
+into place, so a crash leaves either the previous history or the new one. An
+unreadable history file is renamed to `history.gob.<UTC time>.corrupt` and
+ranking starts fresh.
 
 Embedding applications can choose another history file with `OpenHistory`.
 sysc-shell keeps its legacy path at
