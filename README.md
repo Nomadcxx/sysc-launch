@@ -239,8 +239,10 @@ to start the application before it records usage. Call `Close` when your
 application stops using the service.
 
 `Query` returns a generation number. `ResultBatch.Gen` lets an asynchronous UI
-discard a result from an older query. The default activation path starts the
-desktop command. Set `ServiceConfig.Run` to supply a custom launch policy.
+discard a result from an older query. The default activation path sends a Spawn
+request to Niri or sysc-compositor when `NIRI_SOCKET` is set, and starts the
+desktop command directly otherwise. Set `ServiceConfig.Run` to supply a custom
+launch policy.
 
 ## Providers
 

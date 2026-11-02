@@ -21,8 +21,9 @@ const (
 
 // ServiceConfig wires the launcher service. Nil Scan, Rank, Getenv, LookPath,
 // and Now use the XDG desktop scanner, built-in ranker, os.Getenv,
-// exec.LookPath, and time.Now. Nil Run starts desktop commands directly; a
-// configured Run receives the legacy Niri spawn argv. Non-positive StaleAfter
+// exec.LookPath, and time.Now. Nil Run uses compositor IPC when NIRI_SOCKET is
+// set, and starts commands directly otherwise. A configured Run receives the
+// legacy Niri spawn argv. Non-positive StaleAfter
 // and ActivateTimeout use one minute and five seconds; the timeout applies to
 // a configured Run callback. Nil History disables usage persistence and
 // boosting; nil Logf suppresses scanner and provider diagnostics.
@@ -214,8 +215,8 @@ func (s *Service) RefreshApplications() ([]Entry, error) {
 
 // Activate runs a row of the last published result set on the service
 // goroutine. A row whose provider has an Activate function goes to it;
-// otherwise the desktop command starts directly unless ServiceConfig.Run
-// supplies the legacy Niri spawn override. Usage is recorded only on success.
+// otherwise ServiceConfig.Run handles it, or the default uses NIRI_SOCKET when
+// set and starts directly otherwise. Usage is recorded only on success.
 func (s *Service) Activate(id, action string) error {
 	req := activateRequest{id: id, action: action, reply: make(chan error, 1)}
 	select {
@@ -447,6 +448,16 @@ func (s *Service) activate(entries []Entry, query, id, action string) error {
 		}
 		spawn = append(spawn, argv...)
 		if err := s.cfg.Run(ctx, spawn); err != nil {
+			return err
+		}
+	} else if socket := s.cfg.Getenv("NIRI_SOCKET"); socket != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ActivateTimeout)
+		defer cancel()
+		command := argv
+		if workDir != "" {
+			command = append([]string{"sh", "-c", `cd "$1" && shift && exec "$@"`, "sh", workDir}, argv...)
+		}
+		if err := spawnIPC(ctx, socket, command); err != nil {
 			return err
 		}
 	} else if err := launchDesktop(argv, workDir); err != nil {

@@ -42,6 +42,7 @@ func extraProviders(activated *[]string, mu *sync.Mutex) []Provider {
 func newProviderService(t *testing.T, activated *[]string, mu *sync.Mutex, spawned *[][]string) *Service {
 	t.Helper()
 	svc := NewService(ServiceConfig{
+		Getenv: func(string) string { return "" },
 		Scan: func() []Entry {
 			return []Entry{{ID: "alpha.desktop", Name: "Alpha", Argv: []string{"alpha"},
 				Actions: []Action{{ID: "new", Name: "New", Argv: []string{"alpha", "--new"}}}}}
@@ -433,7 +434,8 @@ func TestActivateUnknownRowFallsBackToSpawnPath(t *testing.T) {
 
 func TestResultActionSurvivesThePublish(t *testing.T) {
 	svc := NewService(ServiceConfig{
-		Scan: func() []Entry { return []Entry{{ID: "a", Name: "A"}} },
+		Getenv: func(string) string { return "" },
+		Scan:   func() []Entry { return []Entry{{ID: "a", Name: "A"}} },
 		Rank: func(es []Entry, q string, _ func(string, string) int) []Result {
 			return []Result{{Entry: es[0], Action: "new"}}
 		},
@@ -451,6 +453,7 @@ func TestProviderActivationIsRecordedInHistory(t *testing.T) {
 	var activated []string
 	h := loadHistory(t.TempDir()+"/history.gob", time.Now, nil)
 	svc := NewService(ServiceConfig{
+		Getenv:    func(string) string { return "" },
 		Scan:      func() []Entry { return nil },
 		History:   h,
 		Providers: extraProviders(&activated, &mu),
@@ -472,8 +475,9 @@ func TestProviderActivationIsRecordedInHistory(t *testing.T) {
 // consumers read a nil publish as "nothing arrived".
 func TestNoMatchPublishesTheProvidersEmptySlice(t *testing.T) {
 	svc := NewService(ServiceConfig{
-		Scan: func() []Entry { return []Entry{{ID: "a", Name: "A"}} },
-		Rank: func([]Entry, string, func(string, string) int) []Result { return []Result{} },
+		Getenv: func(string) string { return "" },
+		Scan:   func() []Entry { return []Entry{{ID: "a", Name: "A"}} },
+		Rank:   func([]Entry, string, func(string, string) int) []Result { return []Result{} },
 	})
 	t.Cleanup(svc.Close)
 	recvResults(t, svc)
