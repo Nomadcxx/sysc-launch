@@ -42,7 +42,8 @@ func TestServicePublishesInitialSnapshot(t *testing.T) {
 	t.Parallel()
 
 	svc := NewService(ServiceConfig{
-		Scan: func() []Entry { return []Entry{{Name: "Zulu"}, {Name: "Alpha"}} },
+		Getenv: func(string) string { return "" },
+		Scan:   func() []Entry { return []Entry{{Name: "Zulu"}, {Name: "Alpha"}} },
 	})
 	defer svc.Close()
 
@@ -227,6 +228,7 @@ func TestServiceRescansWhenStaleOnOpen(t *testing.T) {
 	clock.ns.Store(time.Now().UnixNano())
 	var scans atomic.Int32
 	svc := NewService(ServiceConfig{
+		Getenv: func(string) string { return "" },
 		Scan: func() []Entry {
 			scans.Add(1)
 			return []Entry{{Name: "Alpha"}}
@@ -264,8 +266,9 @@ func TestServiceNewerQuerySupersedesInflight(t *testing.T) {
 		return rank(entries, query, boost)
 	}
 	svc := NewService(ServiceConfig{
-		Scan: func() []Entry { return []Entry{{Name: "Fast"}} },
-		Rank: rankHook,
+		Getenv: func(string) string { return "" },
+		Scan:   func() []Entry { return []Entry{{Name: "Fast"}} },
+		Rank:   rankHook,
 	})
 	defer svc.Close()
 
@@ -306,6 +309,7 @@ func TestServiceNewerQuerySupersedesInflightCommandProvider(t *testing.T) {
 		return []byte(argv[1] + " row\n"), nil
 	}, time.Second)
 	svc := NewService(ServiceConfig{
+		Getenv:    func(string) string { return "" },
 		Scan:      func() []Entry { return nil },
 		Providers: []Provider{provider},
 	})
@@ -332,7 +336,8 @@ func TestServiceResultsAreImmutableSlices(t *testing.T) {
 	t.Parallel()
 
 	svc := NewService(ServiceConfig{
-		Scan: func() []Entry { return []Entry{{Name: "Alpha"}, {Name: "Beta"}} },
+		Getenv: func(string) string { return "" },
+		Scan:   func() []Entry { return []Entry{{Name: "Alpha"}, {Name: "Beta"}} },
 	})
 	defer svc.Close()
 
@@ -352,7 +357,8 @@ func TestServiceBatchCarriesQueryGeneration(t *testing.T) {
 	t.Parallel()
 
 	svc := NewService(ServiceConfig{
-		Scan: func() []Entry { return []Entry{{Name: "Alpha"}, {Name: "Beta"}} },
+		Getenv: func(string) string { return "" },
+		Scan:   func() []Entry { return []Entry{{Name: "Alpha"}, {Name: "Beta"}} },
 	})
 	defer svc.Close()
 
@@ -391,7 +397,8 @@ func TestServiceRoutesPrefixQueries(t *testing.T) {
 	t.Parallel()
 
 	svc := NewService(ServiceConfig{
-		Scan: func() []Entry { return []Entry{{Name: "Alpha"}} },
+		Getenv: func(string) string { return "" },
+		Scan:   func() []Entry { return []Entry{{Name: "Alpha"}} },
 	})
 	defer svc.Close()
 
@@ -416,6 +423,7 @@ func TestServiceAppliesUsageBoost(t *testing.T) {
 	clock := &testClock{t: time.Now()}
 	h := loadHistory(filepath.Join(t.TempDir(), "history.gob"), clock.now, nil)
 	svc := NewService(ServiceConfig{
+		Getenv: func(string) string { return "" },
 		Scan: func() []Entry {
 			return []Entry{{ID: "alpha.desktop", Name: "Alpha"}, {ID: "zulu.desktop", Name: "Zulu"}}
 		},
@@ -440,6 +448,7 @@ func TestServiceRaceRepublishVsQueries(t *testing.T) {
 	clock := &atomicClock{}
 	clock.ns.Store(time.Now().UnixNano())
 	svc := NewService(ServiceConfig{
+		Getenv: func(string) string { return "" },
 		Scan: func() []Entry {
 			return []Entry{{Name: "Alpha"}, {Name: "Beta", Comment: "needle"}}
 		},

@@ -105,8 +105,9 @@ func TestRunQueryWritesOneJSONSnapshot(t *testing.T) {
 	}
 	factory := func(logf func(string, ...any)) queryService {
 		return launcher.NewService(launcher.ServiceConfig{
-			Scan: func() []launcher.Entry { return []launcher.Entry{entry} },
-			Logf: logf,
+			Getenv: func(string) string { return "" },
+			Scan:   func() []launcher.Entry { return []launcher.Entry{entry} },
+			Logf:   logf,
 		})
 	}
 	var stdout, stderr bytes.Buffer
@@ -336,6 +337,7 @@ func TestRunLaunchUsesEntryFromInitialSnapshot(t *testing.T) {
 			&stderr,
 			func(logf func(string, ...any)) queryService {
 				return launcher.NewService(launcher.ServiceConfig{
+					Getenv: func(string) string { return "" },
 					Scan: func() []launcher.Entry {
 						close(scanStarted)
 						<-releaseScan

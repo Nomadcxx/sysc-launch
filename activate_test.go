@@ -38,6 +38,7 @@ func (r *recordRunner) lastArgv() []string {
 func activateService(t *testing.T, runner *recordRunner, h *History) *Service {
 	t.Helper()
 	svc := NewService(ServiceConfig{
+		Getenv: func(string) string { return "" },
 		Scan: func() []Entry {
 			return []Entry{{
 				ID:      "firefox.desktop",
@@ -91,6 +92,7 @@ func TestActivateUsesDefaultTerminalChangedByConfigReload(t *testing.T) {
 	selectedTerminal := ""
 	runner := &recordRunner{}
 	svc := NewService(ServiceConfig{
+		Getenv: func(string) string { return "" },
 		Scan: func() []Entry {
 			return []Entry{
 				{ID: "foot", Name: "Foot", Argv: []string{"foot", "--server"}, TerminalApp: true},
@@ -186,6 +188,7 @@ func TestActivateMissingProgramReturnsError(t *testing.T) {
 
 	missingProgram := filepath.Join(t.TempDir(), "missing")
 	svc := NewService(ServiceConfig{
+		Getenv: func(string) string { return "" },
 		Scan: func() []Entry {
 			return []Entry{{ID: "missing", Argv: []string{missingProgram}}}
 		},
@@ -248,6 +251,7 @@ func TestActivateWorkDirSpawnsViaSh(t *testing.T) {
 
 	runner := &recordRunner{}
 	svc := NewService(ServiceConfig{
+		Getenv: func(string) string { return "" },
 		Scan: func() []Entry {
 			return []Entry{{ID: "game", Name: "Game", Argv: []string{"./game"}, WorkDir: "/srv/game"}}
 		},
@@ -280,6 +284,7 @@ func TestActivateDirectLaunchUsesArgvAndWorkDir(t *testing.T) {
 	t.Setenv("SYSC_LAUNCH_TEST_OUTPUT", output)
 
 	svc := NewService(ServiceConfig{
+		Getenv: func(string) string { return "" },
 		Scan: func() []Entry {
 			return []Entry{{ID: "capture", Argv: []string{"./capture.sh", "one value", "two"}, WorkDir: workDir}}
 		},
@@ -314,6 +319,7 @@ func TestActivateRefusesEmptyArgv(t *testing.T) {
 
 	runner := &recordRunner{}
 	svc := NewService(ServiceConfig{
+		Getenv: func(string) string { return "" },
 		Scan: func() []Entry {
 			return []Entry{{ID: "broken.desktop", Name: "Broken"}}
 		},
